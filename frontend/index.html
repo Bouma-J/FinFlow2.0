@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0e3b37" />
+    <link rel="icon" type="image/jpeg" href="/logo.jpg" />
+    <title>FIN_FLOW — Thuin Tech</title>
+    <script>
+      // Restaurer la charte publique de la filiale avant les styles et React.
+      // Format partagé avec src/hooks/brandingCache.ts ; aucune donnée métier.
+      (() => {
+        try {
+          let kind = "id";
+          let value = localStorage.getItem("finflow_tenant");
+          if (!localStorage.getItem("finflow_access")) {
+            kind = "code";
+            const route = location.pathname.match(/^\/login\/([^/]+)\/?$/);
+            value = (route ? decodeURIComponent(route[1]) : "").trim() ||
+              (new URLSearchParams(location.search).get("filiale") || "").trim() ||
+              localStorage.getItem("finflow.login-tenant-code");
+            value = value ? value.trim().toUpperCase() : null;
+          }
+          if (!value) return;
+          const cached = JSON.parse(localStorage.getItem(`finflow.branding.v1.${kind}.${value}`) || "null");
+          const branding = cached?.branding;
+          const colors = ["brand_primary", "brand_secondary", "brand_accent", "brand_sidebar", "brand_sidebar_text"];
+          if (cached?.version !== 1 || !branding || branding[kind] !== value ||
+              !colors.every(field => typeof branding[field] === "string" && /^#[0-9a-f]{6}$/i.test(branding[field])) ||
+              !cached.variables || typeof cached.variables !== "object") return;
+          const entries = Object.entries(cached.variables);
+          // Accepter uniquement les valeurs CSS produites par notre générateur de charte.
+          if (!entries.length || !entries.every(([key, css]) =>
+            /^--[a-z0-9-]+$/.test(key) && typeof css === "string" && css.length < 500 &&
+            /^[a-z0-9#(),.%\s-]+$/i.test(css) && !/url|expression|import/i.test(css))) return;
+          entries.forEach(([key, css]) => document.documentElement.style.setProperty(key, css));
+        } catch {
+          // Stockage indisponible ou cache invalide : l'API reste la source de vérité.
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

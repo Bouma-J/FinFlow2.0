@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finflow-backend
+  namespace: finflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: finflow-backend
+  template:
+    metadata:
+      labels:
+        app: finflow-backend
+    spec:
+      containers:
+        - name: backend
+          image: finflow-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: finflow-config
+            - secretRef:
+                name: finflow-secrets
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/
+              port: 8000
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finflow-backend
+  namespace: finflow
+spec:
+  selector:
+    app: finflow-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: finflow-backend
+  namespace: finflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: finflow-backend
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

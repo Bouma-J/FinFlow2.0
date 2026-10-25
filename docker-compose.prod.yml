@@ -1,0 +1,87 @@
+# =========================================================================
+# FIN_FLOW — surcharge production (Ubuntu / VM)
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Prérequis : fichier `.env` à la racine (voir documentation/13-guide-deploiement-ubuntu.md)
+# =========================================================================
+
+name: finflow
+
+x-backend-env: &backend-env
+  DJANGO_SETTINGS_MODULE: config.settings.prod
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY requis}
+  DJANGO_DEBUG: "False"
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS requis}
+  DJANGO_SECURE_SSL_REDIRECT: ${DJANGO_SECURE_SSL_REDIRECT:-True}
+  DJANGO_SECURE_HSTS_SECONDS: ${DJANGO_SECURE_HSTS_SECONDS:-}
+  DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS: ${DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS:-}
+  DJANGO_SECURE_HSTS_PRELOAD: ${DJANGO_SECURE_HSTS_PRELOAD:-}
+  DJANGO_CORS_ALLOWED_ORIGINS: ${DJANGO_CORS_ALLOWED_ORIGINS:?DJANGO_CORS_ALLOWED_ORIGINS requis}
+  DATABASE_URL: postgres://finflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@db:5432/finflow
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  DB_CONN_MAX_AGE: "60"
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  GROUP_CONSOLIDATION_CURRENCY: ${GROUP_CONSOLIDATION_CURRENCY:-XOF}
+  SEED_DEMO: "0"
+  STORAGE_BACKEND: s3
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?MINIO_ROOT_USER requis}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD requis}
+  AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME:-finflow-documents}
+  AWS_S3_ENDPOINT_URL: http://minio:9000
+  AWS_S3_CUSTOM_DOMAIN: ${AWS_S3_CUSTOM_DOMAIN:?AWS_S3_CUSTOM_DOMAIN requis}
+  AWS_S3_REGION_NAME: ${AWS_S3_REGION_NAME:-us-east-1}
+  AWS_S3_ADDRESSING_STYLE: path
+  AWS_S3_URL_PROTOCOL: ${AWS_S3_URL_PROTOCOL:-https:}
+  AWS_QUERYSTRING_AUTH: "True"
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
+  EMAIL_HOST: ${EMAIL_HOST:-}
+  EMAIL_PORT: ${EMAIL_PORT:-587}
+  EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+  EMAIL_USE_SSL: ${EMAIL_USE_SSL:-False}
+  EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+  EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-FIN_FLOW <noreply@finflow.local>}
+  FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:?FRONTEND_BASE_URL requis}
+  SMTP_SSL_VERIFY: ${SMTP_SSL_VERIFY:-1}
+  # Chiffrement au repos des mots de passe SMTP filiale / secrets CBS
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY requis}
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: finflow
+      POSTGRES_USER: finflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}
+
+  minio:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER requis}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD requis}
+    # !override : sinon Compose ajoute ces ports à ceux du fichier de base
+    # (9000:9000 + 127.0.0.1:9000) → conflit au démarrage de MinIO.
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      # Console : accès local / tunnel SSH uniquement
+      - "127.0.0.1:9001:9001"
+
+  backend:
+    environment:
+      <<: *backend-env
+
+  worker:
+    environment:
+      <<: *backend-env
+      RUN_MIGRATIONS: "0"
+
+  beat:
+    environment:
+      <<: *backend-env
+      RUN_MIGRATIONS: "0"
+
+  frontend:
+    # Remplace 80:80 (base) par 8080 en local (Nginx hôte en 80/443).
+    ports: !override
+      - "127.0.0.1:8080:80"

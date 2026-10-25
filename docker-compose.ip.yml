@@ -1,0 +1,17 @@
+# =========================================================================
+# FIN_FLOW — surcharge accès par IP (sans domaine)
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                  -f docker-compose.ip.yml up -d --build
+#
+# En HTTP : MinIO est publié sur :9000 (URLs présignées).
+# En HTTPS : ajouter docker-compose.ip-tls.yml (MinIO en 127.0.0.1:19000,
+# Nginx hôte termine le TLS sur :443 et :9000).
+# =========================================================================
+
+services:
+  minio:
+    ports: !override
+      - "9000:9000"
+      # Console : rester en local / tunnel SSH
+      - "127.0.0.1:9001:9001"

@@ -1,0 +1,10 @@
+# Dépendances de développement
+-r base.txt
+
+psycopg2-binary==2.9.10
+django-debug-toolbar==4.4.6
+ruff==0.8.4
+black==24.10.0
+pytest==8.3.4
+pytest-django==4.9.0
+factory-boy==3.3.1

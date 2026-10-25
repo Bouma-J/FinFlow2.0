@@ -1,0 +1,34 @@
+{
+  "name": "finflow-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "check:encoding": "node scripts/check-encoding.mjs",
+    "build": "npm run check:encoding && tsc && vite build",
+    "test:e2e": "playwright test",
+    "test:e2e:api": "playwright test --config=playwright.api.config.ts",
+    "test:e2e:api:isolated": "node scripts/run-api-smoke.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.62.0",
+    "axios": "^1.7.9",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "lucide-react": "^1.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.19.2",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

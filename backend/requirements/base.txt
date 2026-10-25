@@ -1,0 +1,21 @@
+# Dépendances communes à tous les environnements
+Django==5.1.4
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+django-environ==0.11.2
+django-cors-headers==4.6.0
+django-filter==24.3
+drf-spectacular==0.28.0
+Pillow==11.0.0
+django-storages==1.14.4
+boto3==1.35.80
+celery==5.4.0
+redis==5.2.1
+requests==2.32.3
+python-dateutil==2.9.0.post0
+tzdata>=2024.2
+docxtpl==0.19.0
+openpyxl==3.1.5
+num2words==0.5.13
+pyotp==2.9.0
+cryptography>=43,<46

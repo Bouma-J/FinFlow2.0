@@ -1,0 +1,62 @@
+# Environnements virtuels
+env_virtuel/
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Django
+*.sqlite3
+db.sqlite3
+/backend/media/
+/backend/staticfiles/
+/backend/schema.yml
+
+# Environnement
+.env
+*.env
+!*.env.example
+
+# Certificats CA locaux (proxy à inspection TLS) — spécifiques au poste.
+# Les dossiers backend/certs et frontend/certs restent versionnés (.gitkeep)
+# pour que Docker COPY certs/ fonctionne hors proxy d'entreprise.
+**/certs/*
+!**/certs/.gitkeep
+**/certs/ca-bundle.crt
+
+# Frontend (Node / Vite)
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/test-results-api/
+npm-debug.log*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Fichiers temporaires Office
+CONTRATS/~$*
+**/~$*
+
+
+docker-rebuild.log
+*.log
+
+# Artefacts de campagnes QA/tests manuels (rapports, configs capturées).
+# Ils périment vite et peuvent contenir des identifiants de recette.
+_qa_*
+
+# Artefacts temporaires produits par les tests d'audit locaux.
+**/.audit-*/
+

@@ -1,0 +1,31 @@
+# Lifecycle S3 / MinIO — archive froide des objets GED
+# Appliquer avec AWS CLI ou mc selon l'environnement.
+#
+# Exemple AWS :
+#   aws s3api put-bucket-lifecycle-configuration \
+#     --bucket finflow-documents \
+#     --lifecycle-configuration file://lifecycle.json
+#
+# Règles :
+# - Transition Glacier / IA après 90 jours
+# - Expiration optionnelle après 2555 jours (~7 ans) — à valider réglementairement
+
+{
+  "Rules": [
+    {
+      "ID": "ged-infrequent-access",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "documents/" },
+      "Transitions": [
+        { "Days": 90, "StorageClass": "STANDARD_IA" },
+        { "Days": 365, "StorageClass": "GLACIER" }
+      ]
+    },
+    {
+      "ID": "ged-expire-optional",
+      "Status": "Disabled",
+      "Filter": { "Prefix": "documents/" },
+      "Expiration": { "Days": 2555 }
+    }
+  ]
+}

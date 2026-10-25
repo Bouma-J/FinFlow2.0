@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finflow-worker
+  namespace: finflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: finflow-worker
+  template:
+    metadata:
+      labels:
+        app: finflow-worker
+    spec:
+      containers:
+        - name: worker
+          image: finflow-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "config", "worker", "-l", "info"]
+          env:
+            - name: RUN_MIGRATIONS
+              value: "0"
+          envFrom:
+            - configMapRef:
+                name: finflow-config
+            - secretRef:
+                name: finflow-secrets
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finflow-beat
+  namespace: finflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finflow-beat
+  template:
+    metadata:
+      labels:
+        app: finflow-beat
+    spec:
+      containers:
+        - name: beat
+          image: finflow-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "config", "beat", "-l", "info"]
+          env:
+            - name: RUN_MIGRATIONS
+              value: "0"
+          envFrom:
+            - configMapRef:
+                name: finflow-config
+            - secretRef:
+                name: finflow-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finflow-frontend
+  namespace: finflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: finflow-frontend
+  template:
+    metadata:
+      labels:
+        app: finflow-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: finflow-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finflow-frontend
+  namespace: finflow
+spec:
+  selector:
+    app: finflow-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: finflow
+  namespace: finflow
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  rules:
+    - host: finflow.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: finflow-backend
+                port:
+                  number: 8000
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: finflow-backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: finflow-frontend
+                port:
+                  number: 80

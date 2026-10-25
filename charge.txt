@@ -1,0 +1,495 @@
+CAHIER DES CHARGES FONCTIONNEL ET TECHNIQUE
+Système de Workflow de Gestion des Dossiers de Crédit
+Architecture SaaS Multi-Tenants avec Intégration Multi-Core Banking
+
+Version : 2.0
+Statut : Pour appel d'offres
+Date : Juillet 2026
+
+--------------------------------------------------------------------------------
+SOMMAIRE
+--------------------------------------------------------------------------------
+1.  Présentation du projet
+2.  Périmètre fonctionnel
+3.  Exigences fonctionnelles
+4.  Reporting et tableaux de bord
+5.  Exigences non-fonctionnelles
+6.  Exigences techniques et de sécurité
+7.  Conformité réglementaire
+8.  Gouvernance des données Groupe / Filiales
+9.  Reprise des données et réversibilité
+10. Stratégie de tests et recette
+11. Exploitation, support et maintenance (TMA)
+12. Organisation du projet et jalons
+13. Livrables attendus
+14. Critères d'évaluation des offres
+15. Matrice de traçabilité des exigences (trame)
+16. Glossaire
+
+--------------------------------------------------------------------------------
+1. Présentation du projet
+--------------------------------------------------------------------------------
+1.1 Contexte
+Le Groupe dispose de plusieurs filiales spécialisées dans les activités de crédit. Chaque filiale possède sa propre organisation, ses propres produits de crédit ainsi que son propre Core Banking System (CBS). Malgré ces spécificités, les processus d'instruction, d'approbation, de mise en place et de suivi des crédits doivent être harmonisés au niveau du Groupe.
+Le présent projet consiste à développer une plateforme centralisée de gestion du cycle de vie complet des dossiers de crédit reposant sur une architecture SaaS Multi-Tenants garantissant une isolation stricte des données entre les filiales.
+Cette plateforme devra permettre d'automatiser les workflows de traitement, de renforcer la traçabilité des opérations, d'améliorer la qualité des décisions de crédit, de sécuriser les traitements et de faciliter l'intégration avec les différents Core Banking Systems utilisés par les filiales.
+
+1.2 Objectifs
+Les principaux objectifs sont les suivants :
+•	Digitaliser l'ensemble du processus d'octroi de crédit.
+•	Standardiser les procédures de traitement tout en conservant les spécificités de chaque filiale.
+•	Réduire les délais de traitement des dossiers.
+•	Améliorer le contrôle interne et la conformité réglementaire.
+•	Sécuriser les validations grâce à un moteur de workflow paramétrable.
+•	Mettre en place une gestion électronique complète des documents.
+•	Centraliser la gestion des garanties, cautions et recouvrements.
+•	Assurer une intégration fiable avec les différents Core Banking Systems.
+•	Fournir des tableaux de bord opérationnels et décisionnels en temps réel.
+
+1.3 Indicateurs de succès du projet (KPIs cibles)
+La réussite du projet sera mesurée notamment par :
+•	Réduction du délai moyen d'instruction d'un dossier d'au moins 40 % par rapport à la situation actuelle.
+•	Taux de dématérialisation des dossiers supérieur à 95 %.
+•	Taux d'automatisation des transmissions vers les Core Banking supérieur à 98 %.
+•	Réduction du portefeuille à risque (PAR30) grâce à un meilleur suivi du recouvrement.
+•	Taux d'adoption par les utilisateurs supérieur à 90 % à six mois de la mise en production.
+
+--------------------------------------------------------------------------------
+2. Périmètre fonctionnel
+--------------------------------------------------------------------------------
+La solution devra couvrir l'ensemble du cycle de vie d'un dossier de crédit depuis la création de la demande jusqu'au remboursement complet du prêt.
+Le périmètre comprend notamment :
+•	Gestion des clients.
+•	Initiation des demandes de crédit.
+•	Gestion documentaire électronique.
+•	Analyse financière.
+•	Analyse du risque.
+•	Simulation de crédit.
+•	Workflow d'approbation.
+•	Gestion des garanties.
+•	Gestion des cautions.
+•	Génération automatique des contrats.
+•	Décaissement.
+•	Intégration avec les Core Banking Systems.
+•	Suivi post-décaissement.
+•	Recouvrement amiable et contentieux.
+•	Administration.
+•	Reporting.
+•	Audit et sécurité.
+
+2.1 Hors périmètre (à confirmer)
+Sauf mention contraire dans l'offre, les éléments suivants sont considérés hors périmètre de la présente consultation :
+•	La comptabilité générale et analytique (assurée par les Core Banking / ERP existants).
+•	La paie et la gestion des ressources humaines.
+•	La signature électronique qualifiée tierce (le prestataire proposera une intégration mais la fourniture du service de confiance reste à préciser).
+•	La fourniture des infrastructures matérielles (à préciser selon le mode d'hébergement retenu).
+
+--------------------------------------------------------------------------------
+3. Exigences fonctionnelles
+--------------------------------------------------------------------------------
+3.1 Administration et Paramétrage
+La plateforme devra permettre :
+•	une administration Groupe et une administration propre à chaque filiale ;
+•	une gestion multi-tenants avec isolation complète des données ;
+•	la gestion des utilisateurs, profils, rôles et habilitations (RBAC) ;
+•	la définition des délégations de pouvoirs (avec dates de début/fin et suppléance) ;
+•	le paramétrage des produits de crédit ;
+•	le paramétrage des circuits d'approbation selon les montants, les risques, les agences ou les directions ;
+•	la création de formulaires dynamiques ;
+•	la configuration des check-lists documentaires ;
+•	le paramétrage des notifications, rappels et SLA.
+Le paramétrage devra être réalisable par un administrateur métier habilité, via une interface d'administration, sans intervention sur le code source.
+
+3.2 Gestion des dossiers de crédit
+Le système devra permettre :
+•	la création des demandes de crédit ;
+•	la gestion des clients particuliers, professionnels et entreprises ;
+•	l'enregistrement des informations KYC ;
+•	la simulation des crédits ;
+•	l'analyse financière ;
+•	l'évaluation des risques ;
+•	la notation interne ;
+•	la consultation de l'historique du client ;
+•	la gestion des observations et commentaires ;
+•	la gestion des visites terrain ;
+•	la validation suivant un workflow configurable ;
+•	la génération automatique des contrats.
+Chaque étape devra être historisée afin d'assurer une traçabilité complète (utilisateur, date/heure, action, valeur avant/après).
+
+3.3 Gestion électronique des documents (GED)
+La plateforme devra intégrer une GED complète permettant :
+•	le chargement de documents ;
+•	le chargement de photographies ;
+•	la numérisation des pièces ;
+•	le classement par catégorie ;
+•	le versionning des documents ;
+•	l'archivage électronique ;
+•	la recherche multicritère ;
+•	la prévisualisation des documents ;
+•	le téléchargement sécurisé.
+Les catégories devront être paramétrables et inclure notamment :
+•	Carte Nationale d'Identité ;
+•	Passeport ;
+•	RCCM ;
+•	IFU ;
+•	Statuts de société ;
+•	Etats financiers ;
+•	Bulletins de salaire ;
+•	Contrats ;
+•	Photos du client ;
+•	Photos de l'activité ;
+•	Photos du domicile ;
+•	Photos des garanties ;
+•	Rapports de visite ;
+•	Rapports d'expertise ;
+•	Tout autre document défini par la filiale.
+Le système devra contrôler les dates d'expiration des documents et générer automatiquement des alertes.
+Exigences complémentaires GED :
+•	formats supportés : PDF, JPEG, PNG, TIFF, DOCX, XLSX (liste paramétrable) ;
+•	taille maximale par fichier paramétrable (par défaut 25 Mo) ;
+•	analyse antivirus systématique à l'import ;
+•	horodatage et empreinte (hash) de chaque document pour garantir l'intégrité.
+
+3.4 Gestion des garanties
+Le système devra assurer la gestion complète des garanties.
+Les garanties prises en charge devront inclure :
+•	Hypothèques ;
+•	Gages ;
+•	Nantissements ;
+•	Dépôts de garantie ;
+•	Garanties bancaires ;
+•	Dations en paiement ;
+•	Garanties solidaires ;
+•	Garanties diverses.
+Pour chaque garantie, le système devra gérer :
+•	la description détaillée ;
+•	les propriétaires ;
+•	les valeurs d'expertise ;
+•	les valeurs actualisées ;
+•	les assurances ;
+•	les photos ;
+•	les coordonnées GPS (optionnelles) ;
+•	les rapports d'expertise ;
+•	les actes notariés ;
+•	les titres fonciers ;
+•	les cartes grises ;
+•	les certificats de propriété.
+Le système devra également gérer :
+•	les réévaluations périodiques ;
+•	les mainlevées ;
+•	les réalisations de garanties ;
+•	les transferts entre crédits ;
+•	le calcul du taux de couverture des garanties par dossier ;
+•	l'historique complet des mouvements.
+
+3.5 Gestion des cautions
+La plateforme devra permettre :
+•	l'enregistrement des cautions physiques et morales ;
+•	la gestion des engagements de caution ;
+•	le suivi des plafonds d'engagement ;
+•	la gestion documentaire des cautions ;
+•	la signature des actes de caution ;
+•	la recherche des cautions déjà engagées ;
+•	le suivi des risques liés aux cautions.
+
+3.6 Workflow de validation
+Le moteur de workflow devra être entièrement paramétrable par un administrateur métier habilité, au moyen d'un éditeur graphique (idéalement conforme à la notation BPMN 2.0 ou équivalent), sans développement spécifique.
+Il devra permettre :
+•	plusieurs niveaux de validation ;
+•	des validations parallèles ou séquentielles ;
+•	des seuils par montant ;
+•	des seuils par type de produit ;
+•	des seuils par niveau de risque ;
+•	les retours pour correction ;
+•	les rejets motivés ;
+•	les validations exceptionnelles ;
+•	les escalades automatiques (sur dépassement de SLA) ;
+•	les délégations et suppléances en cas d'absence d'un valideur ;
+•	le versionnage des circuits (un dossier suit la version du circuit en vigueur à sa création) ;
+•	les notifications par courriel ou SMS.
+Limites du paramétrage : la configuration devra couvrir les cas courants (conditions sur données du dossier, seuils, rôles) sans code. Les règles nécessitant un calcul complexe ou un appel externe pourront s'appuyer sur des règles de gestion documentées et testées.
+
+3.7 Décaissement et intégration Core Banking
+Après approbation, le système devra transmettre automatiquement les informations vers le Core Banking.
+Compte tenu de l'organisation du Groupe, chaque filiale possède son propre Core Banking System.
+La plateforme devra donc disposer d'un connecteur indépendant par filiale.
+Chaque connecteur devra être paramétrable afin de gérer :
+•	les URL d'accès ;
+•	les API REST ;
+•	les services SOAP ;
+•	les échanges SFTP ;
+•	les fichiers batch ;
+•	les certificats ;
+•	les clés d'authentification ;
+•	les règles de mapping.
+Les échanges devront être journalisés afin d'assurer une traçabilité complète et permettre la reprise automatique en cas d'échec.
+Exigences complémentaires d'intégration :
+•	gestion de l'idempotence pour éviter les doubles décaissements ;
+•	mécanisme de rejeu (retry) avec temporisation progressive et file d'attente d'erreurs ;
+•	réconciliation périodique entre l'état des dossiers dans la plateforme et l'état dans le Core Banking ;
+•	mode dégradé et alerte en cas d'indisponibilité d'un Core Banking ;
+•	catalogue documenté des services d'échange (API contract) pour chaque filiale.
+
+3.8 Gestion du recouvrement
+La plateforme devra intégrer un module complet de recouvrement permettant :
+•	le suivi des échéances ;
+•	le calcul automatique des retards ;
+•	la classification du portefeuille à risque (PAR) ;
+•	la gestion des promesses de paiement ;
+•	la planification des visites terrain ;
+•	les relances automatiques par SMS, courriel ou courrier ;
+•	le suivi des dossiers précontentieux ;
+•	le suivi des procédures judiciaires ;
+•	la gestion des saisies ;
+•	la gestion des réalisations de garanties ;
+•	la gestion des dations en paiement ;
+•	les tableaux de bord des agents de recouvrement.
+
+--------------------------------------------------------------------------------
+4. Reporting et tableaux de bord
+--------------------------------------------------------------------------------
+Le système devra proposer des tableaux de bord en temps réel permettant de suivre :
+•	les demandes de crédit ;
+•	les délais de traitement ;
+•	les montants approuvés ;
+•	les montants rejetés ;
+•	les décaissements ;
+•	les garanties ;
+•	les cautions ;
+•	le portefeuille à risque ;
+•	les impayés ;
+•	les activités des utilisateurs.
+Les données devront être exportables vers Excel, PDF ainsi que vers des plateformes décisionnelles telles que Power BI.
+
+Deux niveaux de restitution sont attendus :
+•	Reporting opérationnel filiale : périmètre d'une seule filiale, à destination des équipes d'exploitation.
+•	Reporting consolidé Groupe : agrégation multi-filiales avec filtres combinables (voir section 8.2), à destination du pilotage Groupe, avec possibilité de drill-down de la vue Groupe vers la filiale puis vers le détail autorisé.
+
+Exigences complémentaires :
+•	tableaux de bord filtrables par filiale, pays/zone, agence, produit, segment de clientèle, devise, période, statut, niveau de risque et chargé de dossier ;
+•	filtres combinables entre eux et vues « pivotables » (drill-down / drill-up) ;
+•	consolidation multi-devises avec conversion vers une devise de consolidation Groupe (taux paramétrable) ;
+•	restitution respectant strictement les habilitations et l'isolation multi-tenants ;
+•	possibilité de construire des rapports personnalisés (report builder) ;
+•	rafraîchissement des indicateurs opérationnels en quasi temps réel (< 1 minute).
+
+--------------------------------------------------------------------------------
+5. Exigences non-fonctionnelles
+--------------------------------------------------------------------------------
+5.1 Volumétrie et montée en charge (à ajuster selon le contexte réel)
+•	Nombre de filiales cible : à préciser (dimensionnement pour au moins 10 filiales).
+•	Nombre d'utilisateurs nommés : à préciser (dimensionnement pour au moins 1 000).
+•	Utilisateurs simultanés en pointe : au moins 300.
+•	Volume de dossiers traités par an : à préciser (dimensionnement pour au moins 100 000).
+•	Volume documentaire : dimensionnement pour plusieurs téraoctets, extensible.
+•	La solution devra être évolutive horizontalement (scalabilité) sans refonte.
+
+5.2 Performance
+•	Temps d'affichage d'un écran courant : < 2 secondes (95e percentile).
+•	Temps d'ouverture d'un dossier complet : < 3 secondes.
+•	Temps de réponse d'une recherche multicritère : < 3 secondes.
+•	Génération d'un contrat / document : < 10 secondes.
+•	Transmission au Core Banking après approbation : < 30 secondes en nominal.
+
+5.3 Disponibilité et continuité
+•	Disponibilité cible en heures ouvrées : 99,9 % ; disponibilité globale minimale : 99,5 %.
+•	RPO (perte de données maximale admissible) : ≤ 15 minutes.
+•	RTO (délai maximal de reprise après incident majeur) : ≤ 4 heures.
+•	Plan de sauvegarde/restauration testé et documenté ; tests de restauration périodiques.
+•	Plan de reprise d'activité (PRA/PCA) décrit dans l'offre.
+
+5.4 Ergonomie et accessibilité
+•	Interface responsive (poste de travail, tablette).
+•	Multilingue (français au minimum ; architecture prête pour d'autres langues).
+•	Respect des bonnes pratiques d'accessibilité (référence WCAG 2.1 niveau AA visée).
+•	Parcours utilisateurs optimisés pour réduire le nombre de clics sur les tâches fréquentes.
+
+5.5 Rétention et archivage
+•	Durées de conservation des documents et des données paramétrables selon la réglementation applicable (par défaut, conservation légale des pièces de crédit à préciser, souvent 10 ans).
+•	Conservation de la piste d'audit sur une durée réglementaire minimale à préciser.
+•	Politique de purge et d'anonymisation des données conforme à la réglementation sur les données personnelles.
+
+--------------------------------------------------------------------------------
+6. Exigences techniques et de sécurité
+--------------------------------------------------------------------------------
+La solution devra être développée selon une architecture moderne reposant sur une application unique multi-tenants avec une base de données isolée par filiale ou un schéma dédié.
+Les technologies préconisées sont :
+•	Backend : Python Django ;
+•	Frontend : React ou Angular (un seul framework à retenir pour homogénéiser les livrables) ;
+•	Base de données PostgreSQL ;
+•	Stockage documentaire compatible S3 (MinIO ou équivalent) ;
+•	API REST (documentées, versionnées, au format OpenAPI) ;
+•	Docker et Kubernetes pour le déploiement.
+Le prestataire pourra proposer une architecture alternative équivalente, dûment justifiée.
+La plateforme devra garantir :
+•	le chiffrement des données au repos et en transit (TLS 1.2+ minimum) ;
+•	une authentification forte (SSO, LDAP, Active Directory, MFA) ;
+•	une gestion fine des habilitations (RBAC) et le principe du moindre privilège ;
+•	une piste d'audit complète et inaltérable ;
+•	la journalisation des opérations (logs applicatifs, sécurité, intégrations) ;
+•	la sauvegarde automatique des données ;
+•	une disponibilité minimale de 99,5 % ;
+•	une architecture hautement disponible et évolutive ;
+•	le respect des exigences réglementaires applicables aux établissements financiers.
+Exigences de sécurité complémentaires :
+•	cloisonnement strict des données entre tenants, vérifié par des tests dédiés ;
+•	gestion sécurisée des secrets (coffre-fort de secrets, pas de secrets en clair dans le code) ;
+•	tests de sécurité (revue de code, tests d'intrusion) avant mise en production ;
+•	conformité aux principales vulnérabilités OWASP Top 10 ;
+•	traçabilité des accès aux données sensibles.
+
+--------------------------------------------------------------------------------
+7. Conformité réglementaire
+--------------------------------------------------------------------------------
+La solution devra respecter les exigences réglementaires applicables aux établissements de crédit dans les zones d'exploitation des filiales, notamment :
+•	les réglementations prudentielles et de reporting de la (des) banque(s) centrale(s) et autorités de tutelle compétentes (à préciser selon les zones : ex. BCEAO/UMOA, COBAC/CEMAC, ou autres) ;
+•	les exigences en matière de lutte contre le blanchiment de capitaux et le financement du terrorisme (LCB-FT / AML-CFT), incluant le contrôle KYC et le filtrage éventuel ;
+•	les normes comptables applicables, notamment la classification et le provisionnement des créances (référentiel type IFRS 9 ou équivalent local) ;
+•	la réglementation relative à la protection des données à caractère personnel applicable (RGPD ou loi locale équivalente), incluant droits des personnes, minimisation, localisation des données.
+Le prestataire devra préciser dans son offre comment la solution adresse chacun de ces référentiels et rester adaptable à leurs évolutions.
+
+--------------------------------------------------------------------------------
+8. Gouvernance des données Groupe / Filiales
+--------------------------------------------------------------------------------
+La plateforme doit concilier deux exigences apparemment opposées : l'isolation stricte des données par filiale et la consolidation au niveau Groupe.
+
+8.1 Principes
+•	Les données opérationnelles restent cloisonnées par tenant (filiale).
+•	La consolidation Groupe s'effectue via des vues agrégées et/ou un entrepôt décisionnel dédié, sans permettre l'accès nominatif aux dossiers d'une autre filiale par défaut.
+•	Le modèle d'habilitation devra distinguer clairement : rôles Groupe (pilotage, consolidation), rôles filiale (exploitation), et définir précisément « qui voit quoi ».
+•	Toute consolidation devra respecter la réglementation sur les données personnelles et le secret bancaire.
+•	La localisation d'hébergement des données (data residency) devra être précisée et conforme aux contraintes de chaque juridiction.
+
+8.2 Consolidation Groupe multi-axes avec filtres
+La consolidation au niveau Groupe ne se limite pas à une somme globale : elle devra permettre une analyse dynamique selon plusieurs axes de filtrage combinables. Le système devra offrir une restitution consolidée filtrable et « pivotable » (drill-down / drill-up) selon au moins les axes suivants :
+•	par filiale (une, plusieurs ou toutes les filiales) ;
+•	par pays / zone géographique / juridiction ;
+•	par agence, région ou direction ;
+•	par produit et famille de produits de crédit ;
+•	par segment de clientèle (particuliers, professionnels, entreprises) ;
+•	par devise (avec conversion vers une devise de consolidation Groupe et taux de change paramétrable) ;
+•	par période (jour, mois, trimestre, année, exercice, comparaison N / N-1) ;
+•	par statut du dossier et étape du workflow ;
+•	par niveau de risque / classe de notation interne ;
+•	par classe de portefeuille à risque (PAR30, PAR90, etc.) ;
+•	par chargé de dossier, valideur ou équipe.
+Ces filtres devront être combinables entre eux, et la vue devra pouvoir passer d'une consolidation Groupe à une décomposition par filiale, puis au détail autorisé, selon les habilitations.
+
+8.3 Niveaux et périmètre de consolidation
+•	Vue Groupe globale : agrégation de l'ensemble des filiales pour le pilotage stratégique.
+•	Vue Groupe filtrée : agrégation d'un sous-ensemble de filiales (ex. par zone ou par pôle d'activité).
+•	Vue filiale : périmètre d'une seule filiale, réservée aux rôles de cette filiale.
+•	Chaque utilisateur ne voit que le périmètre autorisé par ses habilitations ; un rôle Groupe peut être restreint à un sous-ensemble de filiales.
+
+8.4 Cohérence, sécurité et normalisation
+•	La consolidation devra reposer sur un modèle de données normalisé (référentiels communs : produits, devises, catégories de garanties, motifs de rejet, etc.) afin de garantir la comparabilité entre filiales.
+•	Par défaut, la consolidation Groupe expose des données agrégées/anonymisées ; l'accès nominatif inter-filiales n'est possible que via une habilitation explicite et tracée, dans le respect du secret bancaire et de la réglementation sur les données personnelles.
+•	Toute restitution consolidée devra respecter les mêmes règles d'habilitation, de traçabilité et d'audit que les vues opérationnelles.
+
+--------------------------------------------------------------------------------
+9. Reprise des données et réversibilité
+--------------------------------------------------------------------------------
+9.1 Reprise de l'existant
+•	Le prestataire devra proposer une stratégie de reprise des données existantes (clients, dossiers en cours, garanties, cautions) depuis les systèmes actuels des filiales.
+•	La reprise inclura : cadrage, extraction, transformation, chargement, contrôles de cohérence et validation.
+•	Un plan de reprise par filiale, avec jeux de tests et critères de conformité, sera fourni.
+
+9.2 Réversibilité
+•	En fin de contrat, le prestataire devra garantir la restitution de l'intégralité des données dans un format ouvert et exploitable (exports structurés + documents).
+•	Une procédure de réversibilité documentée devra être fournie, ainsi qu'un accompagnement à la transition.
+
+--------------------------------------------------------------------------------
+10. Stratégie de tests et recette
+--------------------------------------------------------------------------------
+•	Le prestataire devra fournir une stratégie de tests (unitaires, intégration, bout en bout, performance, sécurité).
+•	Des environnements distincts devront être mis à disposition : développement, recette (UAT) et production (préproduction recommandée).
+•	Chaque exigence devra être associée à un critère d'acceptation vérifiable (voir matrice de traçabilité, section 15).
+•	Une recette fonctionnelle (VABF) et une recette après mise en production (VSR) seront organisées avec le Groupe et les filiales.
+•	Les anomalies seront classées par sévérité (bloquante, majeure, mineure) avec des délais de correction contractuels.
+
+--------------------------------------------------------------------------------
+11. Exploitation, support et maintenance (TMA)
+--------------------------------------------------------------------------------
+•	Le prestataire précisera les modalités de maintenance corrective, évolutive et adaptative (TMA).
+•	Niveaux de service (SLA) de support à préciser, par exemple :
+    - Incident bloquant : prise en charge < 1 h, résolution/contournement < 4 h.
+    - Incident majeur : prise en charge < 4 h, résolution < 1 jour ouvré.
+    - Incident mineur : résolution < 5 jours ouvrés.
+•	Plages horaires de support et astreinte à définir.
+•	Supervision (monitoring), alerting et gestion des logs centralisée.
+•	Processus de gestion des changements et de mise en production (CI/CD, versionnage).
+
+--------------------------------------------------------------------------------
+12. Organisation du projet et jalons
+--------------------------------------------------------------------------------
+•	Méthodologie proposée (agile, cycle en V ou hybride) à décrire.
+•	Gouvernance projet : comité de pilotage, comité projet, points d'avancement.
+•	Jalons indicatifs : cadrage → spécifications → développement itératif → recette → pilote sur une filiale → généralisation.
+•	Plan de conduite du changement et de formation.
+•	Planning prévisionnel et charges par profil à fournir.
+
+--------------------------------------------------------------------------------
+13. Livrables attendus
+--------------------------------------------------------------------------------
+Le prestataire retenu devra fournir :
+•	les spécifications fonctionnelles détaillées ;
+•	les spécifications techniques ;
+•	l'architecture détaillée de la solution ;
+•	la plateforme complète de gestion des dossiers de crédit ;
+•	les API d'intégration avec les différents Core Banking Systems des filiales ;
+•	les modules de gestion documentaire, garanties, cautions et recouvrement ;
+•	les tableaux de bord et rapports ;
+•	la documentation utilisateur et administrateur ;
+•	la documentation d'exploitation et d'architecture ;
+•	les procédures d'installation et d'exploitation ;
+•	le plan et les jeux de tests, ainsi que les rapports de recette ;
+•	le plan de reprise des données et de réversibilité ;
+•	les formations des administrateurs et des utilisateurs ;
+•	l'assistance au démarrage et la garantie corrective.
+La solution devra être entièrement paramétrable afin de permettre l'ajout de nouvelles filiales, de nouveaux produits de crédit et de nouveaux connecteurs Core Banking sans modification majeure du code source.
+
+--------------------------------------------------------------------------------
+14. Critères d'évaluation des offres
+--------------------------------------------------------------------------------
+Les offres seront évaluées selon une pondération à définir par le Groupe, par exemple :
+•	Couverture fonctionnelle et adéquation au besoin.
+•	Solidité de l'architecture technique, sécurité et scalabilité.
+•	Expérience et références sur des projets similaires (secteur financier, multi-tenants).
+•	Qualité de la méthodologie, du planning et de la conduite du changement.
+•	Modalités de support, TMA et engagements de service (SLA).
+•	Coût global (licences, mise en œuvre, exploitation, TMA) et modèle de tarification.
+•	Réversibilité et pérennité de la solution.
+
+--------------------------------------------------------------------------------
+15. Matrice de traçabilité des exigences (trame)
+--------------------------------------------------------------------------------
+Chaque exigence du présent document devra être reprise et suivie dans une matrice de traçabilité selon le modèle suivant :
+
+| ID exigence | Section | Description | Priorité (MoSCoW) | Critère d'acceptation | Statut | Livrable associé |
+|-------------|---------|-------------|-------------------|-----------------------|--------|------------------|
+| EX-3.6-01   | 3.6     | Workflow paramétrable multi-niveaux | Must | Un admin métier crée un circuit à 3 niveaux sans code et le teste | À traiter | Module Workflow |
+| EX-3.7-01   | 3.7     | Connecteur Core Banking par filiale | Must | Décaissement transmis et confirmé sur l'environnement de test d'une filiale | À traiter | Connecteurs CBS |
+| EX-5.3-01   | 5.3     | RPO ≤ 15 min / RTO ≤ 4 h | Must | Test de restauration validé dans les seuils | À traiter | PRA/PCA |
+| ...         | ...     | ...         | ...               | ...                   | ...    | ...              |
+
+Priorités recommandées selon la méthode MoSCoW : Must / Should / Could / Won't.
+
+--------------------------------------------------------------------------------
+16. Glossaire
+--------------------------------------------------------------------------------
+•	CBS : Core Banking System (système d'information bancaire central).
+•	GED : Gestion Électronique des Documents.
+•	KYC : Know Your Customer (connaissance client).
+•	RBAC : Role-Based Access Control (contrôle d'accès basé sur les rôles).
+•	SLA : Service Level Agreement (engagement de niveau de service).
+•	PAR : Portfolio At Risk (portefeuille à risque) ; PAR30 = créances en retard > 30 jours.
+•	RPO : Recovery Point Objective (perte de données maximale admissible).
+•	RTO : Recovery Time Objective (délai maximal de reprise).
+•	PRA/PCA : Plan de Reprise / Continuité d'Activité.
+•	VABF / VSR : Vérification d'Aptitude au Bon Fonctionnement / Vérification de Service Régulier.
+•	TMA : Tierce Maintenance Applicative.
+•	LCB-FT / AML-CFT : Lutte Contre le Blanchiment et le Financement du Terrorisme.
+•	RCCM : Registre du Commerce et du Crédit Mobilier.
+•	IFU : Identifiant Fiscal Unique.
+•	MFA : Multi-Factor Authentication (authentification multifacteur).
+•	SSO : Single Sign-On (authentification unique).

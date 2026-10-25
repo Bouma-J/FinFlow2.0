@@ -1,0 +1,7 @@
+# Dépendances de production
+-r base.txt
+
+psycopg2-binary==2.9.10
+gunicorn==23.0.0
+whitenoise==6.8.2
+sentry-sdk==2.19.2

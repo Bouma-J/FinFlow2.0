@@ -1,0 +1,66 @@
+{
+  "tenants": [
+    {
+      "code": "FIL01",
+      "roles": 25,
+      "active_workflows": 12,
+      "policy_persisted": false,
+      "policy": {
+        "require_credit_contracts": true,
+        "require_credit_signed_contracts": false,
+        "require_surety_contracts": true,
+        "require_setup_request": false,
+        "require_setup_four_eyes": false,
+        "risk_mode": "RECOMMENDATION",
+        "approval_validity_days": 0,
+        "max_analysis_age_days": 0,
+        "require_final_review": true,
+        "setup_execution_role": "OPERATIONS",
+        "require_setup_authorizer_separation": false,
+        "recheck_kyc_on_setup": true,
+        "require_verified_documents": false,
+        "collateral_coverage_mode": "ALERT",
+        "require_field_visit": false,
+        "allow_unfavorable_analysis_submit": true,
+        "require_product_checklist": false,
+        "match_product_client_type": false,
+        "kyc_gate": "ON_SUBMIT",
+        "product_bounds_gate": "ON_SUBMIT",
+        "amount_approved_mode": "ALLOW",
+        "show_readiness_checklist": true,
+        "enable_cancel_status": false,
+        "allow_collateral_during_approval": false,
+        "require_surety_signed_contracts": true,
+        "require_formalization_before_disbursement": false
+      },
+      "analysis_thresholds": {
+        "max_debt_ratio": "40",
+        "min_dscr": "1.2",
+        "max_leverage_ratio": "70",
+        "min_living_wage_per_capita": "0",
+        "min_interest_coverage": "3",
+        "max_gearing": "1.5",
+        "min_financial_autonomy": "20",
+        "min_current_ratio": "1",
+        "min_guarantee_coverage": "100",
+        "stress_pct": "20",
+        "transferable_quota_fraction": "33.33",
+        "informal_income_weight": "70",
+        "haircut_mortgage": "0",
+        "haircut_vehicle": "30",
+        "haircut_jewelry": "20",
+        "haircut_financial_deposit": "0",
+        "haircut_financial_security": "10",
+        "haircut_other": "20"
+      },
+      "cbs": [
+        {
+          "name": "CBS Filiale 01",
+          "mode": "LOCAL",
+          "simulated": true
+        }
+      ]
+    }
+  ],
+  "issues": []
+}

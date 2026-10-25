@@ -1,0 +1,13 @@
+# =========================================================================
+# FIN_FLOW — MinIO derrière Nginx TLS (accès par IP en HTTPS)
+#
+# Nginx hôte écoute :9000 en SSL et proxifie vers 127.0.0.1:19000.
+# Sans ce fichier, docker-compose.ip.yml publie MinIO en HTTP sur :9000
+# (contenu mixte dès que l'app est en HTTPS).
+# =========================================================================
+
+services:
+  minio:
+    ports: !override
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:9001:9001"
