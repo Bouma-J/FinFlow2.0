@@ -45,7 +45,8 @@ services:
       timeout: 3s
       retries: 30
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
+    user: "0:0"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -80,12 +81,13 @@ NETWORK="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}
   "$(docker compose --project-directory "$WORKDIR_HOST" ps -q minio)")"
 docker run --rm --network "$NETWORK" \
   -e MC_HOST_src="http://minioadmin:minioadmin@minio:9000" \
-  minio/mc:latest mb -p src/finflow-documents
+  cgr.dev/chainguard/minio-client:latest mb -p src/finflow-documents
 printf 'ged-selftest' > "${WORKDIR}/selftest.txt"
 docker run --rm --network "$NETWORK" \
   -e MC_HOST_src="http://minioadmin:minioadmin@minio:9000" \
+  --user 0:0 \
   -v "$(host_path "${WORKDIR}/selftest.txt"):/data/selftest.txt:ro" \
-  minio/mc:latest cp /data/selftest.txt src/finflow-documents/selftest.txt
+  cgr.dev/chainguard/minio-client:latest cp /data/selftest.txt src/finflow-documents/selftest.txt
 
 export FINFLOW_DIR="$WORKDIR"
 export COMPOSE_FILES="-f docker-compose.yml"

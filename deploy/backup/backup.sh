@@ -100,8 +100,9 @@ if [[ "${SKIP_MINIO:-0}" != "1" ]]; then
   docker run --rm \
     --network "$NETWORK" \
     -e MC_HOST_src="http://${MINIO_USER}:${MINIO_PASS}@minio:9000" \
+    --user 0:0 \
     -v "$(host_path "${SNAP}/minio"):/backup" \
-    minio/mc:latest \
+    cgr.dev/chainguard/minio-client:latest \
     mirror --overwrite "src/${BUCKET}" /backup
 else
   warn "MinIO ignoré (SKIP_MINIO=1)"
