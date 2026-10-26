@@ -84,11 +84,11 @@ class User(AbstractUser):
     )
     phone = models.CharField("téléphone", max_length=50, blank=True)
     mfa_enabled = models.BooleanField("MFA activé", default=False)
-    mfa_secret = models.CharField(
+    mfa_secret_encrypted = models.CharField(
         "secret TOTP",
-        max_length=64,
+        max_length=256,
         blank=True,
-        help_text="Secret base32 pour l'authentification TOTP (vide si MFA inactif).",
+        help_text="Secret TOTP chiffré au repos (vide si MFA inactif).",
     )
     must_change_password = models.BooleanField(
         "doit changer le mot de passe",
@@ -106,6 +106,18 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.get_full_name() or self.username
+
+    @property
+    def mfa_secret(self):
+        from apps.common.secret_crypto import decrypt_str
+
+        return decrypt_str(self.mfa_secret_encrypted)
+
+    @mfa_secret.setter
+    def mfa_secret(self, value):
+        from apps.common.secret_crypto import encrypt_str
+
+        self.mfa_secret_encrypted = encrypt_str(value)
 
     def clean(self):
         from django.core.exceptions import ValidationError

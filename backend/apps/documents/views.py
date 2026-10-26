@@ -134,7 +134,8 @@ class DocumentViewSet(TenantScopedViewSet):
     def upload_url(self, request):
         """
         URL PUT présignée pour upload direct vers MinIO/S3.
-        Corps : {filename, content_type?, category?}
+        Corps : {filename, size, content_type?, category?}. La taille exacte est
+        exigée et signée pour que S3/MinIO refuse un PUT d'une autre taille.
         """
         if not is_s3_storage():
             raise ValidationError(
@@ -143,23 +144,28 @@ class DocumentViewSet(TenantScopedViewSet):
         filename = (request.data.get("filename") or "upload.bin").strip()
         size = request.data.get("size")
         try:
-            size_int = int(size) if size is not None and str(size).strip() != "" else None
+            if isinstance(size, bool) or size is None or str(size).strip() == "":
+                raise ValueError
+            size_int = int(size)
+            if str(size_int) != str(size).strip() or size_int <= 0:
+                raise ValueError
         except (TypeError, ValueError):
-            size_int = None
+            raise ValidationError(
+                {"size": "Indiquez la taille exacte du fichier en octets."}
+            )
         from apps.common.upload_validation import assert_upload_meta
 
         filename = assert_upload_meta(filename=filename, size=size_int)
         tenant_id = get_current_tenant_id() or "group"
-        if size_int:
-            from apps.documents.quotas import assert_ged_quota
-            from apps.tenants.models import Tenant
+        from apps.documents.quotas import assert_ged_quota
+        from apps.tenants.models import Tenant
 
-            tenant = (
-                Tenant.objects.filter(pk=tenant_id).first()
-                if tenant_id != "group"
-                else None
-            )
-            assert_ged_quota(tenant, size_int)
+        tenant = (
+            Tenant.objects.filter(pk=tenant_id).first()
+            if tenant_id != "group"
+            else None
+        )
+        assert_ged_quota(tenant, size_int)
         content_type = (
             request.data.get("content_type") or "application/octet-stream"
         )
@@ -169,7 +175,7 @@ class DocumentViewSet(TenantScopedViewSet):
         category = safe_filename(raw_category.replace("/", "_")) or "misc"
         key = f"documents/{tenant_id}/{category}/{uuid.uuid4().hex}_{filename}"
         payload = generate_presigned_upload(
-            key=key, content_type=content_type, expires=900
+            key=key, content_type=content_type, size_bytes=size_int, expires=900
         )
         if not payload:
             raise ValidationError("Impossible de générer l'URL présignée.")

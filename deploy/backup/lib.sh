@@ -149,6 +149,84 @@ decrypt_secrets_file() {
     -pass env:BACKUP_PASSPHRASE
 }
 
+encrypt_snapshot_archive() {
+  local source_dir="$1" dest="$2"
+  local parent name work pass_file encrypted_tmp old_umask
+  resolve_passphrase || return 1
+  [[ -n "${BACKUP_PASSPHRASE:-}" ]] || return 1
+  command -v gpg >/dev/null 2>&1 || return 1
+  parent="$(dirname "$source_dir")"
+  name="$(basename "$source_dir")"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/finflow-backup.XXXXXX")" || return 1
+  chmod 700 "$work" || { rm -rf "$work"; return 1; }
+  old_umask="$(umask)"
+  umask 077
+  pass_file="${work}/passphrase"
+  printf '%s' "$BACKUP_PASSPHRASE" > "$pass_file"
+  umask "$old_umask"
+  encrypted_tmp="$(mktemp_host "$(dirname "$dest")")" || {
+    rm -rf "$work"
+    return 1
+  }
+  if ! tar -C "$parent" -czf "${work}/snapshot.tar.gz" "$name"; then
+    rm -f "$encrypted_tmp"
+    rm -rf "$work"
+    return 1
+  fi
+  if ! gpg --batch --yes --pinentry-mode loopback \
+      --passphrase-file "$pass_file" --symmetric --cipher-algo AES256 \
+      --output "$encrypted_tmp" "${work}/snapshot.tar.gz"; then
+    rm -f "$encrypted_tmp"
+    rm -rf "$work"
+    return 1
+  fi
+  chmod 600 "$encrypted_tmp" 2>/dev/null || true
+  if ! mv -f "$encrypted_tmp" "$dest"; then
+    rm -f "$encrypted_tmp"
+    rm -rf "$work"
+    return 1
+  fi
+  rm -rf "$work"
+}
+
+decrypt_snapshot_archive() {
+  local archive="$1" dest="$2"
+  local work pass_file members member old_umask
+  resolve_passphrase || return 1
+  [[ -n "${BACKUP_PASSPHRASE:-}" ]] || return 1
+  command -v gpg >/dev/null 2>&1 || return 1
+  work="$(mktemp -d "${TMPDIR:-/tmp}/finflow-restore.XXXXXX")" || return 1
+  chmod 700 "$work" || { rm -rf "$work"; return 1; }
+  old_umask="$(umask)"
+  umask 077
+  pass_file="${work}/passphrase"
+  printf '%s' "$BACKUP_PASSPHRASE" > "$pass_file"
+  umask "$old_umask"
+  if ! gpg --batch --yes --pinentry-mode loopback \
+      --passphrase-file "$pass_file" --decrypt \
+      --output "${work}/snapshot.tar.gz" "$archive"; then
+    rm -rf "$work"
+    return 1
+  fi
+  members="${work}/members.txt"
+  if ! tar -tzf "${work}/snapshot.tar.gz" > "$members"; then
+    rm -rf "$work"
+    return 1
+  fi
+  while IFS= read -r member; do
+    case "$member" in
+      /*|../*|*/../*|*/..) rm -rf "$work"; return 1 ;;
+    esac
+  done < "$members"
+  mkdir -p "$dest" || { rm -rf "$work"; return 1; }
+  if ! tar --no-same-owner --no-same-permissions \
+      -xzf "${work}/snapshot.tar.gz" -C "$dest"; then
+    rm -rf "$work"
+    return 1
+  fi
+  rm -rf "$work"
+}
+
 compose_network() {
   local dir="$1"
   local cid

@@ -59,7 +59,7 @@ class MfaSetupView(APIView):
         user.mfa_secret = secret
         # Ne pas activer tant que la confirmation OTP n'est pas passée.
         user.mfa_enabled = False
-        user.save(update_fields=["mfa_secret", "mfa_enabled"])
+        user.save(update_fields=["mfa_secret_encrypted", "mfa_enabled"])
         uri = pyotp.TOTP(secret).provisioning_uri(
             name=user.email or user.username,
             issuer_name="FIN_FLOW",
@@ -119,6 +119,6 @@ class MfaDisableView(APIView):
                 )
         user.mfa_enabled = False
         user.mfa_secret = ""
-        user.save(update_fields=["mfa_enabled", "mfa_secret"])
+        user.save(update_fields=["mfa_enabled", "mfa_secret_encrypted"])
         invalidate_prefix("me", user.id)
         return Response({"mfa_enabled": False})

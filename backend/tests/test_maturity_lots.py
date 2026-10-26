@@ -38,6 +38,8 @@ def test_sod_blocks_charge_affaire_and_committee(tenant_a):
 def test_formalization_gate_blocks_disbursement(
     tenant_a, product_a, client_a,
 ):
+    from tests.setup_helpers import configure_local_cbs
+
     with tenant_context(tenant_a.id):
         policy, _ = CreditInstructionPolicy.all_tenants.get_or_create(
             tenant=tenant_a,
@@ -57,6 +59,7 @@ def test_formalization_gate_blocks_disbursement(
             reference="REF-FORM-GATE",
             status=CreditApplication.Status.APPROVED,
         )
+        configure_local_cbs(app)
         Guarantee.objects.create(
             tenant=tenant_a,
             client=client_a,

@@ -22,6 +22,8 @@ def approved(tenant_a, client_a, product_a):
 
 @pytest.mark.parametrize("response", [None, {}])
 def test_no_positive_cbs_result_never_creates_local_loan(approved, monkeypatch, response):
+    from tests.setup_helpers import configure_local_cbs
+    configure_local_cbs(approved)
     actor = prepare_setup(approved)
     cbs = Mock(return_value=response)
     monkeypatch.setattr("apps.corebanking.disbursement.submit_credit_to_cbs", cbs)
@@ -31,6 +33,8 @@ def test_no_positive_cbs_result_never_creates_local_loan(approved, monkeypatch, 
 
 
 def test_direct_skip_cbs_never_creates_local_loan(approved, monkeypatch):
+    from tests.setup_helpers import configure_local_cbs
+    configure_local_cbs(approved)
     actor = prepare_setup(approved)
     cbs = Mock()
     monkeypatch.setattr("apps.corebanking.disbursement.submit_credit_to_cbs", cbs)

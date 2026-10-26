@@ -1,10 +1,21 @@
 """Configuration de production."""
+from django.core.exceptions import ImproperlyConfigured
+
 from apps.common.https import host_is_ipv4
 
 from .base import *  # noqa: F401,F403
-from .base import MIDDLEWARE, STORAGE_BACKEND, env
+from .base import DATABASES, MIDDLEWARE, STORAGE_BACKEND, env
 
 DEBUG = False
+
+# SQLite reste le repli des tests et du développement dans settings.base.
+# Une instance chargée avec les paramètres de production doit toujours utiliser
+# PostgreSQL, même si DATABASE_URL est oublié ou mal configuré.
+_database_engine = DATABASES.get("default", {}).get("ENGINE", "")
+if _database_engine != "django.db.backends.postgresql":
+    raise ImproperlyConfigured(
+        "Les paramètres de production exigent PostgreSQL via DATABASE_URL."
+    )
 
 # Docs API désactivées par défaut en production
 ENABLE_API_DOCS = env.bool("ENABLE_API_DOCS", default=False)
@@ -89,8 +100,6 @@ if (
     or "change-me" in _sk.lower()
     or "insecure" in _sk.lower()
 ):
-    from django.core.exceptions import ImproperlyConfigured
-
     raise ImproperlyConfigured(
         "DJANGO_SECRET_KEY doit être une valeur forte (≥ 40 caractères) en "
         "production. Les valeurs connues (change-me-in-production, "
@@ -100,12 +109,18 @@ if (
 # Coffre secrets applicatifs (SMTP / CBS) — indépendant de SECRET_KEY
 _field_key = (FIELD_ENCRYPTION_KEY or "").strip()  # noqa: F405
 if not _field_key:
-    from django.core.exceptions import ImproperlyConfigured
-
     raise ImproperlyConfigured(
         "FIELD_ENCRYPTION_KEY est obligatoire en production "
         "(Fernet url-safe, indépendant de DJANGO_SECRET_KEY)."
     )
+try:
+    from cryptography.fernet import Fernet
+
+    Fernet(_field_key.encode("ascii"))
+except (UnicodeEncodeError, ValueError, TypeError) as exc:
+    raise ImproperlyConfigured(
+        "FIELD_ENCRYPTION_KEY doit être une clé Fernet url-safe valide."
+    ) from exc
 
 if SENTRY_DSN:
     import sentry_sdk

@@ -2,7 +2,7 @@
 
 Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossiers de crédit, avec consolidation Groupe et intégration multi-Core Banking. Ce dépôt contient le **backend** (API REST Django) et le **frontend** (SPA React), conformes au cahier des charges `charge.txt`, ainsi qu'une **orchestration Docker** complète.
 
-**Dépôt :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)
+**Dépôt :** [https://github.com/Bouma-J/FinFlow2.0](https://github.com/Bouma-J/FinFlow2.0)
 
 ## Sommaire
 - [Architecture](#architecture)
@@ -116,22 +116,22 @@ Set-Content frontend\certs\ca-bundle.crt "$pem`n" -Encoding ascii
 
 Hors proxy d'entreprise, cette étape est inutile : créez simplement les fichiers `certs/ca-bundle.crt` vides (ou avec les racines publiques) — les Dockerfiles restent fonctionnels.
 
-> Note : `npm install` en local sur cette machine nécessite aussi `--use-system-ca` (Node 20+) ; définissez `NODE_OPTIONS=--use-system-ca` avant de lancer npm.
+> Note : utilisez Node 24 LTS. Sur cette machine, `npm ci` nécessite aussi `--use-system-ca` ; définissez `NODE_OPTIONS=--use-system-ca` avant de lancer npm.
 
 ## Déploiement Ubuntu
 
-Installation serveur (Docker, TLS, backups) :
+Après avoir cloné le dépôt avec un accès GitHub autorisé, lancer l'installation serveur :
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
+sudo bash deploy/ubuntu-install.sh
 ```
 
 Mise à jour d’une instance déjà en production :
 
 ```bash
 sudo finflow-update
-# ou :
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
+# ou depuis le dépôt cloné :
+sudo bash deploy/ubuntu-update.sh /opt/finflow
 ```
 
 Détail : [`documentation/13-guide-deploiement-ubuntu.md`](documentation/13-guide-deploiement-ubuntu.md), scripts `deploy/ubuntu-install.sh`, `deploy/ubuntu-install-ip.sh` et `deploy/ubuntu-update.sh`.

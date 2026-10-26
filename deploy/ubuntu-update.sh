@@ -8,7 +8,8 @@
 #   sudo bash deploy/ubuntu-update.sh
 #   sudo bash deploy/ubuntu-update.sh /opt/finflow
 #   sudo bash deploy/ubuntu-update.sh --check /opt/finflow
-#   sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
+#   # Depuis une installation mise à jour avec un accès GitHub autorisé :
+#   sudo bash /opt/finflow/deploy/ubuntu-update.sh
 #
 # Options (variables d'environnement) :
 #   INSTALL_DIR=/opt/finflow   Répertoire d'installation
@@ -28,7 +29,7 @@
 set -euo pipefail
 
 INSTALL_DIR_DEFAULT="/opt/finflow"
-REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow.git"
+REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
 
 if [[ -t 1 ]]; then
   C_INFO='\033[1;36m'

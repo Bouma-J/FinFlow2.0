@@ -9,8 +9,7 @@
 #   sudo bash deploy/tls-ip/enable-ip-tls.sh /opt/finflow --self-signed
 #
 # Usage :
-#   curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install-ip.sh | sudo bash
-#   # ou dépôt déjà cloné :
+#   # Cloner d'abord FinFlow2.0 avec un accès GitHub autorisé, puis :
 #   sudo bash deploy/ubuntu-install-ip.sh
 #
 # Variante avec domaines + TLS :
@@ -21,7 +20,7 @@
 # =========================================================================
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow.git"
+REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.ip.yml"
 DEPLOY_MODE="ip"

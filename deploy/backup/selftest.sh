@@ -95,7 +95,7 @@ export SKIP_APP_PAUSE=1
 export FINFLOW_DRILL_MIN_TABLES=1
 
 SNAP="$(bash "${SCRIPT_DIR}/backup.sh" | tail -n 1)"
-[[ -d "$SNAP" ]] || die "backup.sh n'a pas renvoyé un dossier snapshot"
+[[ -f "$SNAP" ]] || die "backup.sh n'a pas renvoyé une archive chiffrée"
 bash "${SCRIPT_DIR}/verify.sh" "$SNAP"
 
 bash "${SCRIPT_DIR}/restore.sh" --target drill --snapshot "$SNAP" --keep

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Snapshot d'instance FinFlow : Postgres (custom) + MinIO + secrets chiffrés.
+# Snapshot chiffré d'instance FinFlow : Postgres (custom) + MinIO + secrets.
 #
 #   sudo FINFLOW_DIR=/opt/finflow ./deploy/backup/backup.sh
 #   BACKUP_PASSPHRASE_FILE=/root/.finflow-backup-pass ./deploy/backup/backup.sh
@@ -7,7 +7,7 @@
 # Variables :
 #   FINFLOW_DIR            Racine de l'instance (défaut : racine du dépôt)
 #   BACKUP_ROOT            /var/backups/finflow
-#   BACKUP_PASSPHRASE      Phrase de chiffrement des secrets
+#   BACKUP_PASSPHRASE      Phrase de chiffrement du snapshot complet
 #   BACKUP_PASSPHRASE_FILE Fichier contenant la phrase (recommandé)
 #   BACKUP_OFFSITE_DIR     Copie rsync du snapshot (optionnel)
 #   SKIP_APP_PAUSE=1       Ne pas arrêter worker/beat
@@ -54,15 +54,24 @@ MINIO_PASS="$(load_dotenv_value "$ENV_FILE" MINIO_ROOT_PASSWORD)"
 MINIO_PASS="${MINIO_PASS:-minioadmin}"
 
 STOPPED=()
-resume_app() {
+SNAP_CREATED=0
+cleanup_backup() {
   local svc
+  # Ne jamais laisser un dump ou miroir en clair après un échec de snapshot.
+  if [[ "$SNAP_CREATED" == "1" ]]; then
+    case "$SNAP" in
+      "${BACKUP_ROOT}/snapshots/"*) rm -rf -- "$SNAP" ;;
+    esac
+  fi
   for svc in "${STOPPED[@]+"${STOPPED[@]}"}"; do
     compose_in "$DIR" start "$svc" >/dev/null 2>&1 || warn "Impossible de relancer ${svc}"
   done
 }
-trap resume_app EXIT
+trap cleanup_backup EXIT
 
-mkdir -p "$SNAP"
+mkdir -p "${BACKUP_ROOT}/snapshots"
+mkdir "$SNAP" || die "Un snapshot existe déjà pour ${STAMP}; réessayez dans une seconde."
+SNAP_CREATED=1
 chmod 700 "$SNAP" 2>/dev/null || true
 log "Snapshot ${STAMP} → ${SNAP}"
 log "Instance  ${DIR}"
@@ -174,11 +183,18 @@ PY
 chmod 600 "${SNAP}/manifest.json" "${SNAP}/postgres.dump" 2>/dev/null || true
 [[ -f "${SNAP}/secrets.env.enc" ]] && chmod 600 "${SNAP}/secrets.env.enc"
 
+ARCHIVE="${SNAP}.tar.gz.gpg"
+log "Chiffrement du snapshot complet"
+encrypt_snapshot_archive "$SNAP" "$ARCHIVE" \
+  || die "Impossible de chiffrer le snapshot (GPG et phrase de passe requis)."
+rm -rf "$SNAP"
+SNAP_CREATED=0
+
 # Rétention : 14 j snapshots, 8 sem. hebdo, 12 mois
-prune_dir() {
+prune_entries() {
   local path="$1" days="$2"
   [[ -d "$path" ]] || return 0
-  find "$path" -mindepth 1 -maxdepth 1 -type d -mtime "+${days}" -exec rm -rf {} +
+  find "$path" -mindepth 1 -maxdepth 1 -mtime "+${days}" -exec rm -rf {} +
 }
 
 DOW="$(date +%u)"   # 7 = dimanche selon locale... use %w 0=Sunday
@@ -187,26 +203,26 @@ DOM="$(date +%d)"
 
 if [[ "$DOW" == "0" ]]; then
   mkdir -p "${BACKUP_ROOT}/weekly"
-  cp -a "$SNAP" "${BACKUP_ROOT}/weekly/${STAMP}"
+  cp -a "$ARCHIVE" "${BACKUP_ROOT}/weekly/${STAMP}.tar.gz.gpg"
 fi
 if [[ "$DOM" == "01" ]]; then
   mkdir -p "${BACKUP_ROOT}/monthly"
-  cp -a "$SNAP" "${BACKUP_ROOT}/monthly/${STAMP}"
+  cp -a "$ARCHIVE" "${BACKUP_ROOT}/monthly/${STAMP}.tar.gz.gpg"
 fi
 
-prune_dir "${BACKUP_ROOT}/snapshots" 14
-prune_dir "${BACKUP_ROOT}/weekly" 56
-prune_dir "${BACKUP_ROOT}/monthly" 366
+prune_entries "${BACKUP_ROOT}/snapshots" 14
+prune_entries "${BACKUP_ROOT}/weekly" 56
+prune_entries "${BACKUP_ROOT}/monthly" 366
 
 if [[ -n "${BACKUP_OFFSITE_DIR:-}" ]]; then
   mkdir -p "${BACKUP_OFFSITE_DIR}"
   log "Copie hors site → ${BACKUP_OFFSITE_DIR}"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a "$SNAP" "${BACKUP_OFFSITE_DIR}/"
+    rsync -a "$ARCHIVE" "${BACKUP_OFFSITE_DIR}/"
   else
-    cp -a "$SNAP" "${BACKUP_OFFSITE_DIR}/"
+    cp -a "$ARCHIVE" "${BACKUP_OFFSITE_DIR}/"
   fi
 fi
 
-ok "Snapshot prêt : ${SNAP}"
-echo "$SNAP"
+ok "Snapshot chiffré prêt : ${ARCHIVE}"
+echo "$ARCHIVE"

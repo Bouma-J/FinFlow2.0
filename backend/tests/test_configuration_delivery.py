@@ -11,6 +11,8 @@ from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 
+from apps.accounts.capabilities import TENANT_ADMIN
+from apps.accounts.services import capability_permissions, create_tenant_role
 from apps.common.tenancy import tenant_context
 from apps.configuration.models import ConfigurationProfile
 from apps.configuration.pricing_catalog import pricing_defaults, validate_pricing
@@ -45,6 +47,9 @@ def config_admin(tenant_a, django_user_model):
         username="delivery_admin", tenant=tenant_a, data_scope="TENANT",
     )
     user.user_permissions.add(*Permission.objects.filter(content_type__app_label="configuration"))
+    role = create_tenant_role(tenant_a, "Configuration admin recette")
+    role.group.permissions.add(*capability_permissions({TENANT_ADMIN}))
+    user.groups.add(role.group)
     api = APIClient()
     api.force_authenticate(user)
     return user, api
@@ -71,6 +76,9 @@ def test_publication_requires_another_author_and_preserves_immutable_version(
     assert api.post(url + "publish/", {}, format="json").status_code == 403
     reviewer = django_user_model.objects.create_user(username="delivery_reviewer", tenant=tenant_a)
     reviewer.user_permissions.add(*Permission.objects.filter(content_type__app_label="configuration"))
+    reviewer_role = create_tenant_role(tenant_a, "Configuration reviewer recette")
+    reviewer_role.group.permissions.add(*capability_permissions({TENANT_ADMIN}))
+    reviewer.groups.add(reviewer_role.group)
     api.force_authenticate(reviewer)
     assert api.post(url + "publish/", {}, format="json").status_code == 200
     response = api.patch(url, {"name": "Rewrite", "expected_updated_at": response.data["updated_at"]}, format="json")

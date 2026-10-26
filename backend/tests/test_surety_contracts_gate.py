@@ -105,12 +105,15 @@ def test_readiness_includes_surety_contracts_check(tenant_a, client_a, product_a
 def test_disbursement_blocked_without_signed_surety(
     tenant_a, client_a, product_a, monkeypatch
 ):
+    from tests.setup_helpers import configure_local_cbs
+
     with tenant_context(tenant_a.id):
         CreditInstructionPolicy.objects.create(
             tenant=tenant_a,
             require_surety_signed_contracts=True,
         )
         app = _app(tenant_a, client_a, product_a, ref="CR-SURETY-BLOCK")
+        configure_local_cbs(app)
         eng = _engagement(tenant_a, app)
         _contract(app, eng, status=GeneratedContract.Status.GENERATED)
         monkeypatch.setattr(
@@ -129,6 +132,8 @@ def test_disbursement_blocked_without_signed_surety(
 def test_disbursement_allowed_when_policy_off(
     tenant_a, client_a, product_a, monkeypatch
 ):
+    from tests.setup_helpers import configure_local_cbs
+
     with tenant_context(tenant_a.id):
         CreditInstructionPolicy.objects.create(
             tenant=tenant_a,
@@ -136,6 +141,7 @@ def test_disbursement_allowed_when_policy_off(
             require_surety_contracts=False,
         )
         app = _app(tenant_a, client_a, product_a, ref="CR-SURETY-OFF")
+        configure_local_cbs(app)
         _engagement(tenant_a, app)
         monkeypatch.setattr(
             "apps.contracts.services.missing_required_contracts",

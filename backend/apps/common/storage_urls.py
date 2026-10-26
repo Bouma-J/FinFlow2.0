@@ -228,6 +228,7 @@ def image_content_type(filename: str) -> str:
 def generate_presigned_upload(
     *,
     key: str,
+    size_bytes: int,
     content_type: str = "application/octet-stream",
     expires: int = 900,
 ) -> dict | None:
@@ -248,6 +249,7 @@ def generate_presigned_upload(
         Params={
             "Bucket": bucket,
             "Key": key,
+            "ContentLength": size_bytes,
             "ContentType": content_type,
         },
         ExpiresIn=expires,
@@ -258,6 +260,7 @@ def generate_presigned_upload(
     return {
         "upload_url": url,
         "key": key,
+        "size_bytes": size_bytes,
         "headers": {"Content-Type": content_type},
         "expires_in": expires,
     }

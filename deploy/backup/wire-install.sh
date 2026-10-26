@@ -46,7 +46,7 @@ fi
 
 if [[ -d /etc/cron.d ]]; then
   cat > /etc/cron.d/finflow-backup <<EOF
-# FinFlow — snapshot quotidien 02:30 (Postgres + MinIO + secrets)
+# FinFlow — archive chiffrée quotidienne 02:30 (Postgres + MinIO + secrets)
 # Destination : ${BACKUP_ROOT}/snapshots (hors du projet ${DIR})
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

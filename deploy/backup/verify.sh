@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Contrôle d'intégrité d'un snapshot (checksums + TOC Postgres + secrets).
 #
-#   ./deploy/backup/verify.sh /var/backups/finflow/snapshots/20260907T023000Z
+#   ./deploy/backup/verify.sh /var/backups/finflow/snapshots/20260907T023000Z.tar.gz.gpg
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,8 +9,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 SNAP="${1:-}"
-[[ -n "$SNAP" && -d "$SNAP" ]] || die "Usage: $0 /chemin/du/snapshot"
-SNAP="$(cd "$SNAP" && pwd)"
+[[ -n "$SNAP" ]] || die "Usage: $0 /chemin/du/snapshot|archive.gpg"
+SNAP_WORK=""
+cleanup_snapshot_temp() {
+  [[ -z "$SNAP_WORK" ]] || rm -rf "$SNAP_WORK"
+}
+trap cleanup_snapshot_temp EXIT
+if [[ -f "$SNAP" ]]; then
+  SNAP_ARCHIVE="$(cd "$(dirname "$SNAP")" && pwd)/$(basename "$SNAP")"
+  SNAP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/finflow-verify.XXXXXX")"
+  chmod 700 "$SNAP_WORK"
+  decrypt_snapshot_archive "$SNAP_ARCHIVE" "$SNAP_WORK" \
+    || die "Archive illisible, phrase de passe incorrecte ou GPG indisponible."
+  SNAP="$(find "$SNAP_WORK" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  [[ -n "$SNAP" ]] || die "Aucun dossier de snapshot dans l'archive."
+elif [[ -d "$SNAP" ]]; then
+  SNAP="$(cd "$SNAP" && pwd)"
+else
+  die "Le snapshot doit désigner un dossier ou une archive chiffrée."
+fi
 MANIFEST="${SNAP}/manifest.json"
 [[ -f "$MANIFEST" ]] || die "manifest.json manquant"
 [[ -f "${SNAP}/postgres.dump" ]] || die "postgres.dump manquant"

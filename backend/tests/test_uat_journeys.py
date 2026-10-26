@@ -153,8 +153,9 @@ def test_uat_credit_pipeline_to_local_loan(tenant_a, product_a):
     assert detail.status_code == 200
     assert detail.json()["status"] == "APPROVED"
 
-    from tests.setup_helpers import prepare_setup
+    from tests.setup_helpers import configure_local_cbs, prepare_setup
     application = CreditApplication.all_tenants.get(pk=app_id)
+    configure_local_cbs(application)
     executor = prepare_setup(application)
     execution_api, execution_headers = _auth(executor, tenant_a)
     with patch("apps.corebanking.disbursement.submit_credit_to_cbs", return_value={

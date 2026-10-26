@@ -3,8 +3,7 @@
 # FIN_FLOW — déploiement interactif Ubuntu (22.04 / 24.04 LTS)
 #
 # Usage (depuis une machine Ubuntu, avec sudo) :
-#   curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | sudo bash
-#   # ou, si le dépôt est déjà cloné :
+#   # Cloner d'abord FinFlow2.0 avec un accès GitHub autorisé, puis :
 #   sudo bash deploy/ubuntu-install.sh
 #
 # Le script demande les domaines, mots de passe DB/MinIO, e-mail Certbot, etc.,
@@ -19,7 +18,7 @@
 # =========================================================================
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow.git"
+REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 DEPLOY_MODE="domain"

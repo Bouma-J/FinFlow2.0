@@ -2,7 +2,7 @@
 # Restauration d'un snapshot FinFlow.
 #
 #   # Épreuve (stack jetable, ne touche pas la prod) :
-#   ./deploy/backup/restore.sh --target drill --snapshot /var/backups/finflow/snapshots/STAMP
+#   ./deploy/backup/restore.sh --target drill --snapshot /var/backups/finflow/snapshots/STAMP.tar.gz.gpg
 #
 #   # Sinistre (arrête l'appli, recrée la base, réécrit le bucket) :
 #   sudo ./deploy/backup/restore.sh --target live --snapshot ... --confirm=RESTORE
@@ -24,8 +24,8 @@ KEEP=0
 usage() {
   cat <<'EOF'
 Usage:
-  restore.sh --target drill --snapshot DIR [--keep]
-  restore.sh --target live  --snapshot DIR --confirm=RESTORE [--restore-secrets]
+  restore.sh --target drill --snapshot DIR|ARCHIVE.gpg [--keep]
+  restore.sh --target live  --snapshot DIR|ARCHIVE.gpg --confirm=RESTORE [--restore-secrets]
 EOF
 }
 
@@ -44,8 +44,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$TARGET" == "live" || "$TARGET" == "drill" ]] || { usage; die "--target live|drill requis"; }
-[[ -n "$SNAP" && -d "$SNAP" ]] || { usage; die "--snapshot DIR requis"; }
-SNAP="$(cd "$SNAP" && pwd)"
+[[ -n "$SNAP" ]] || { usage; die "--snapshot DIR|ARCHIVE.gpg requis"; }
+SNAP_WORK=""
+cleanup_snapshot_temp() {
+  [[ -z "$SNAP_WORK" ]] || rm -rf "$SNAP_WORK"
+}
+trap cleanup_snapshot_temp EXIT
+if [[ -f "$SNAP" ]]; then
+  SNAP_ARCHIVE="$(cd "$(dirname "$SNAP")" && pwd)/$(basename "$SNAP")"
+  SNAP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/finflow-restore.XXXXXX")"
+  chmod 700 "$SNAP_WORK"
+  decrypt_snapshot_archive "$SNAP_ARCHIVE" "$SNAP_WORK" \
+    || die "Archive illisible, phrase de passe incorrecte ou GPG indisponible."
+  SNAP="$(find "$SNAP_WORK" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  [[ -n "$SNAP" ]] || die "Aucun dossier de snapshot dans l'archive."
+elif [[ -d "$SNAP" ]]; then
+  SNAP="$(cd "$SNAP" && pwd)"
+else
+  usage
+  die "--snapshot doit désigner un dossier ou une archive chiffrée."
+fi
 [[ -f "${SNAP}/postgres.dump" ]] || die "postgres.dump introuvable"
 
 bash "${SCRIPT_DIR}/verify.sh" "$SNAP"
@@ -190,7 +208,7 @@ restore_drill() {
     docker network rm finflow-backup-drill >/dev/null 2>&1 || true
   }
   if [[ "$KEEP" -ne 1 ]]; then
-    trap cleanup_drill EXIT
+    trap 'cleanup_drill; cleanup_snapshot_temp' EXIT
   fi
 
   docker rm -f "$db" "$minio" >/dev/null 2>&1 || true

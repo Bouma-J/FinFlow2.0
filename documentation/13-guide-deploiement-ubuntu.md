@@ -2,8 +2,8 @@
 
 Guide pas à pas pour déployer **FIN_FLOW** sur un serveur **Ubuntu Server 22.04 LTS** ou **24.04 LTS**, avec Docker Compose, reverse-proxy TLS et l’ensemble des outils nécessaires.
 
-**Dépôt Git :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
-**Clone :** `git clone https://github.com/Bouma-J/FinFlow.git`
+**Dépôt Git :** [https://github.com/Bouma-J/FinFlow2.0](https://github.com/Bouma-J/FinFlow2.0)<br>
+**Clone (dépôt privé) :** `git clone git@github.com:Bouma-J/FinFlow2.0.git`
 
 Pour la vue d’ensemble multi-environnements (Compose démo, Kubernetes, bare metal), voir aussi [04 — Guide de déploiement](04-guide-deploiement.md).
 
@@ -21,16 +21,14 @@ Deux scripts interactifs au choix :
 **Avec domaines + TLS :**
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
-# ou dépôt cloné :
+# depuis le dépôt cloné avec un accès GitHub autorisé :
 sudo bash deploy/ubuntu-install.sh
 ```
 
 **Par adresse IP (sans domaine — HTTP, ou HTTPS Let’s Encrypt / auto-signé) :**
 
 ```bash
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install-ip.sh | bash'
-# ou dépôt cloné :
+# depuis le dépôt cloné avec un accès GitHub autorisé :
 sudo bash deploy/ubuntu-install-ip.sh
 ```
 
@@ -38,10 +36,8 @@ sudo bash deploy/ubuntu-install-ip.sh
 
 ```bash
 sudo finflow-update
-# ou :
+# ou depuis le dépôt cloné :
 sudo bash /opt/finflow/deploy/ubuntu-update.sh
-# depuis le dépôt :
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
 ```
 
 Le script d’update : backup DB → `git pull` → `docker compose up -d --build` → `migrate` → `sync_role_packs` → `bootstrap_all_tenants` (circuits ML / Dation / Formalisation). Les scripts d’install demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO sur `:9000` en HTTP) et, une fois HTTPS activé, [`docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml) (MinIO en `127.0.0.1:19000`, Nginx termine le TLS sur `:443` et `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
@@ -217,14 +213,14 @@ dig +short finflow.votredomaine.tld
 
 ## 4. Récupération du projet
 
-Dépôt officiel : **https://github.com/Bouma-J/FinFlow.git**
+Dépôt officiel : **https://github.com/Bouma-J/FinFlow2.0.git**
 
 ```bash
 sudo mkdir -p /opt/finflow
 sudo chown "$USER":"$USER" /opt/finflow
 cd /opt/finflow
 
-git clone https://github.com/Bouma-J/FinFlow.git .
+git clone git@github.com:Bouma-J/FinFlow2.0.git .
 ```
 
 Mises à jour ultérieures :
@@ -608,24 +604,26 @@ Images **bakées** (pas de volume code) : tout changement Python/React exige `--
 ## 11. Sauvegardes
 
 L’install pose un cron 02:30 (`/etc/cron.d/finflow-backup`) et une phrase de
-chiffrement dans `/root/.finflow-backup-pass` (mode 600). Chaque snapshot
-contient Postgres (format custom), le miroir MinIO et les clés
-`FIELD_ENCRYPTION_KEY` / `DJANGO_SECRET_KEY` chiffrées.
+chiffrement dans `/root/.finflow-backup-pass` (mode 600). Chaque sauvegarde est
+un archive GPG AES-256 (`.tar.gz.gpg`) contenant Postgres, le miroir MinIO, le
+manifest et les clés applicatives. Le fichier de clés reste aussi chiffré dans
+l’archive. Les copies locales et hors site ne conservent donc pas les dumps en
+clair.
 
 ```bash
 # Snapshot manuel
 sudo FINFLOW_DIR=/opt/finflow /opt/finflow/scripts/backup.sh
 
 # Contrôle d'intégrité
-sudo /opt/finflow/scripts/verify.sh /var/backups/finflow/snapshots/<stamp>
+sudo /opt/finflow/scripts/verify.sh /var/backups/finflow/snapshots/<stamp>.tar.gz.gpg
 
 # Épreuve (stack jetable — ne touche pas la prod)
 sudo /opt/finflow/scripts/restore.sh --target drill \
-  --snapshot /var/backups/finflow/snapshots/<stamp>
+  --snapshot /var/backups/finflow/snapshots/<stamp>.tar.gz.gpg
 
 # Sinistre (recrée la base, réécrit le bucket)
 sudo /opt/finflow/scripts/restore.sh --target live \
-  --snapshot /var/backups/finflow/snapshots/<stamp> \
+  --snapshot /var/backups/finflow/snapshots/<stamp>.tar.gz.gpg \
   --confirm=RESTORE
 # Ajouter --restore-secrets si le .env actuel n'a plus les clés du dump.
 ```
@@ -699,7 +697,7 @@ journalctl -u nginx -u docker -n 100 --no-pager
 
 ## 15. Références
 
-- **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
+- **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow2.0](https://github.com/Bouma-J/FinFlow2.0)
 - **Script d’install Ubuntu (domaines + TLS) :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
 - **Script d’install Ubuntu (IP, HTTP ou HTTPS) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)  
 - **HTTPS sans domaine :** [`../deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh)  
