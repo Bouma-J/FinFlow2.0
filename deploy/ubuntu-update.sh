@@ -14,22 +14,22 @@
 # Options (variables d'environnement) :
 #   INSTALL_DIR=/opt/finflow   Répertoire d'installation
 #   GIT_BRANCH=main            Branche à tirer
-#   SKIP_BACKUP=1              Ne pas sauvegarder la DB avant update
+#   SKIP_BACKUP=1              Sauter explicitement le snapshot complet (déconseillé)
 #   SKIP_GIT=1                 Ne pas faire git pull (images/code déjà présents)
+#   REPO_URL=...               Remplacer explicitement l'URL Git origin
 #   SKIP_BUILD=0               1 = up -d sans --build (déconseillé)
 #
 # Le script :
-#   1. (optionnel) snapshot Postgres + MinIO + secrets
+#   1. snapshot chiffré Postgres + MinIO + secrets (sauf SKIP_BACKUP=1 explicite)
 #   2. git fetch + pull --ff-only
 #   3. docker compose pull + up -d --build
 #      (mode IP / IP+TLS via deploy/compose-files.sh)
 #   4. migrate + sync_role_packs + bootstrap_all_tenants
-#   5. contrôle health API (frontend local :8080)
+#   5. contrôle bloquant health API (frontend local :8080)
 # =========================================================================
 set -euo pipefail
 
 INSTALL_DIR_DEFAULT="/opt/finflow"
-REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
 
 if [[ -t 1 ]]; then
   C_INFO='\033[1;36m'
@@ -55,6 +55,17 @@ need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     die "Exécutez en root : sudo bash deploy/ubuntu-update.sh"
   fi
+}
+
+require_compose_version() {
+  command -v docker >/dev/null 2>&1 || die "Docker Engine est introuvable."
+  local version
+  version="$(docker compose version --short 2>/dev/null || true)"
+  version="${version#v}"
+  [[ -n "$version" ]] || die "Docker Compose v2 est requis."
+  dpkg --compare-versions "$version" ge 2.24.4 \
+    || die "Docker Compose ${version} est trop ancien : FinFlow requiert au minimum 2.24.4 (balise !override)."
+  systemctl enable --now docker
 }
 
 # Repli si compose-files.sh n'est pas encore tiré (1re update d'une vieille instance).
@@ -110,44 +121,76 @@ compose() {
 backup_db() {
   local dir="$1"
   local script="${dir}/deploy/backup/backup.sh"
-  if [[ -x "$script" || -f "$script" ]]; then
-    log "Snapshot pré-update (Postgres + MinIO + secrets)"
-    if FINFLOW_DIR="$dir" BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}" \
-      SKIP_APP_PAUSE="${SKIP_APP_PAUSE:-0}" \
-      bash "$script"; then
-      ok "Snapshot pré-update OK"
-      return
-    fi
-    warn "Snapshot complet impossible — repli dump SQL"
-  fi
-  local stamp out
-  stamp="$(date +%Y%m%d_%H%M%S)"
-  out="/var/backups/finflow"
-  mkdir -p "$out"
-  cd "$dir"
-  log "Sauvegarde PostgreSQL → ${out}/finflow_preupdate_${stamp}.sql.gz"
-  if compose exec -T db pg_dump -U finflow finflow 2>/dev/null | gzip > "$out/finflow_preupdate_${stamp}.sql.gz"; then
-    ok "Backup OK : $out/finflow_preupdate_${stamp}.sql.gz"
-  else
-    warn "Backup DB impossible (stack arrêtée ?). Poursuite…"
-    rm -f "$out/finflow_preupdate_${stamp}.sql.gz"
-  fi
+  [[ -f "$script" ]] || die "Script de snapshot complet absent : $script. Mise à jour interrompue."
+  grep -q 'encrypt_snapshot_archive' "$script" \
+    || die "Le script de sauvegarde installé est ancien et ne chiffre pas le snapshot complet. Mettez les scripts à jour avant l'update."
+  log "Snapshot chiffré pré-update (Postgres + MinIO + secrets)"
+  FINFLOW_DIR="$dir" BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}" \
+    SKIP_APP_PAUSE="${SKIP_APP_PAUSE:-0}" \
+    bash "$script" || die "Le snapshot pré-update a échoué. Aucune mise à jour n'a été appliquée."
+  ok "Snapshot pré-update chiffré OK"
 }
 
 ensure_mail_env() {
   local dir="$1"
   local env_file="$dir/.env"
-  local key
+  local key_data key source
   [[ -f "$env_file" ]] || return 0
 
-  if ! grep -Eq '^FIELD_ENCRYPTION_KEY=' "$env_file" 2>/dev/null; then
-    key="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n')"
+  if ! key_data="$(python3 - "$env_file" <<'PY'
+import base64
+import hashlib
+import re
+import sys
+
+values = {}
+with open(sys.argv[1], encoding="utf-8") as env_file:
+    for line in env_file:
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        name, value = line.rstrip("\r\n").split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\\\"'":
+            value = value[1:-1]
+        values[name] = value
+
+key = values.get("FIELD_ENCRYPTION_KEY", "").strip()
+if key:
+    source = "existing"
+else:
+    secret = values.get("DJANGO_SECRET_KEY", "")
+    if not secret:
+        raise SystemExit(2)
+    # Compatibilité des anciennes instances qui dérivaient Fernet de SECRET_KEY.
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest()).decode("ascii")
+    source = "derived"
+
+if not re.fullmatch(r"[A-Za-z0-9_-]{43}=", key):
+    raise SystemExit(3)
+try:
+    raw = base64.urlsafe_b64decode(key)
+except (ValueError, base64.binascii.Error):
+    raise SystemExit(3)
+if len(raw) != 32:
+    raise SystemExit(3)
+print(f"{source}|{key}")
+PY
+  )"; then
+    die "Impossible de valider FIELD_ENCRYPTION_KEY. Vérifiez DJANGO_SECRET_KEY et restaurez la clé de chiffrement d'origine."
+  fi
+  source="${key_data%%|*}"
+  key="${key_data#*|}"
+  if [[ "$source" == "derived" ]]; then
+    sed -i '/^FIELD_ENCRYPTION_KEY=/d' "$env_file"
     {
       echo
-      echo "# Ajouté par ubuntu-update.sh — chiffrement SMTP filiale"
+      echo "# Compatibilité migration — clé Fernet dérivée de l'ancienne DJANGO_SECRET_KEY."
+      echo "# Ne pas changer cette clé tant que les données chiffrées n'ont pas été migrées."
       printf 'FIELD_ENCRYPTION_KEY="%s"\n' "$key"
     } >> "$env_file"
-    ok "FIELD_ENCRYPTION_KEY ajouté au .env"
+    warn "FIELD_ENCRYPTION_KEY absente : reprise de la clé historique dérivée de DJANGO_SECRET_KEY pour préserver les secrets déjà chiffrés."
+  else
+    ok "FIELD_ENCRYPTION_KEY existante validée."
   fi
 
   if ! grep -Eq '^SMTP_SSL_VERIFY=' "$env_file" 2>/dev/null; then
@@ -158,6 +201,7 @@ ensure_mail_env() {
   if grep -Eq '^EMAIL_BACKEND=.*console' "$env_file" 2>/dev/null; then
     warn "EMAIL_BACKEND=console détecté — passez à smtp.EmailBackend pour un envoi réel (ou SMTP filiale en UI)."
   fi
+  chmod 600 "$env_file"
 }
 
 pull_code() {
@@ -166,14 +210,21 @@ pull_code() {
   local repo="$3"
 
   cd "$dir"
-  if [[ ! -d .git ]]; then
-    warn "Pas de dépôt git dans $dir — skip git pull."
-    return
-  fi
+  [[ -d .git ]] || die "Pas de dépôt Git dans $dir ; mise à jour impossible."
   log "git fetch / checkout ${branch} / pull --ff-only…"
-  git remote set-url origin "$repo" 2>/dev/null || true
-  git fetch --all --prune
-  git checkout "$branch"
+  if [[ -n "$repo" ]]; then
+    if git remote get-url origin >/dev/null 2>&1; then
+      git remote set-url origin "$repo"
+    else
+      git remote add origin "$repo"
+    fi
+  fi
+  git fetch origin "$branch" --prune
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    git checkout "$branch"
+  else
+    git checkout --track -b "$branch" "origin/$branch"
+  fi
   git pull --ff-only origin "$branch"
   ok "Code à jour : $(git rev-parse --short HEAD) ($(git log -1 --pretty=%s))"
 }
@@ -194,7 +245,7 @@ rebuild_stack() {
   local with_build="${2:-1}"
   cd "$dir"
   log "Docker Compose pull…"
-  compose pull || true
+  compose pull
   if [[ "$with_build" == "1" ]]; then
     log "Build & redémarrage (up -d --build)…"
     compose up -d --build
@@ -215,7 +266,8 @@ wait_health() {
     fi
     sleep 5
   done
-  warn "Health check encore en échec — logs : compose logs --tail=100 backend"
+  warn "Health check en échec — derniers journaux des services :"
+  compose logs --tail=100 backend db minio frontend || true
   return 1
 }
 
@@ -227,14 +279,12 @@ post_deploy() {
   ok "Migrations appliquées."
 
   log "Synchronisation packs de rôles…"
-  compose exec -T backend python manage.py sync_role_packs \
-    && ok "Packs RBAC synchronisés." \
-    || warn "sync_role_packs à relancer."
+  compose exec -T backend python manage.py sync_role_packs
+  ok "Packs RBAC synchronisés."
 
   log "Bootstrap filiales (catalogue, Perfect, circuits ML/Dation/Formalisation)…"
-  compose exec -T backend python manage.py bootstrap_all_tenants \
-    && ok "Filiales bootstrapées." \
-    || warn "bootstrap_all_tenants à relancer (aucune filiale ?)."
+  compose exec -T backend python manage.py bootstrap_all_tenants
+  ok "Filiales bootstrapées."
 }
 
 refresh_helpers() {
@@ -385,7 +435,7 @@ main() {
   need_root
 
   local branch="${GIT_BRANCH:-main}"
-  local repo="${REPO_URL:-$REPO_URL_DEFAULT}"
+  local repo="${REPO_URL:-}"
   local skip_backup="${SKIP_BACKUP:-0}"
   local skip_git="${SKIP_GIT:-0}"
   local skip_build="${SKIP_BUILD:-0}"
@@ -401,13 +451,19 @@ main() {
   [[ -f "$dir/docker-compose.yml" ]] || die "docker-compose.yml manquant dans $dir"
   [[ -f "$dir/docker-compose.prod.yml" ]] || die "docker-compose.prod.yml manquant dans $dir"
   [[ -f "$dir/.env" ]] || die "Fichier .env manquant dans $dir — ne pas écraser les secrets."
+  if [[ "$skip_git" != "1" ]]; then
+    [[ -d "$dir/.git" ]] || die "Pas de dépôt Git dans $dir ; précisez SKIP_GIT=1 ou restaurez le dépôt."
+  fi
 
+  require_compose_version
   COMPOSE_FILES="$(detect_compose_files "$dir")"
   log "Install dir : $dir"
   log "Compose     : docker compose $COMPOSE_FILES"
   log "Branche     : $branch"
+  ensure_mail_env "$dir"
 
   if [[ "$skip_backup" != "1" ]]; then
+    ensure_backup_cron "$dir"
     backup_db "$dir"
   else
     warn "SKIP_BACKUP=1 — pas de dump DB."
@@ -424,12 +480,11 @@ main() {
   log "Compose (après pull) : docker compose $COMPOSE_FILES"
   ensure_backup_cron "$dir"
 
-  ensure_mail_env "$dir"
   rebuild_stack "$dir" "$with_build"
-  wait_health || true
+  wait_health
   post_deploy "$dir"
   refresh_helpers "$dir"
-  wait_health || true
+  wait_health
   print_summary "$dir"
 }
 

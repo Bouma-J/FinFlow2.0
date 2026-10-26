@@ -1,6 +1,6 @@
 # 13 — Guide de déploiement Ubuntu (production)
 
-Guide pas à pas pour déployer **FIN_FLOW** sur un serveur **Ubuntu Server 22.04 LTS** ou **24.04 LTS**, avec Docker Compose, reverse-proxy TLS et l’ensemble des outils nécessaires.
+Guide pas à pas pour déployer **FIN_FLOW** sur **Ubuntu Server 22.04, 24.04 ou 26.04 LTS**, avec Docker Compose, reverse-proxy TLS et l’ensemble des outils nécessaires.
 
 **Dépôt Git :** [https://github.com/Bouma-J/FinFlow2.0](https://github.com/Bouma-J/FinFlow2.0)<br>
 **Clone (dépôt privé) :** `git clone git@github.com:Bouma-J/FinFlow2.0.git`
@@ -40,7 +40,20 @@ sudo finflow-update
 sudo bash /opt/finflow/deploy/ubuntu-update.sh
 ```
 
-Le script d’update : backup DB → `git pull` → `docker compose up -d --build` → `migrate` → `sync_role_packs` → `bootstrap_all_tenants` (circuits ML / Dation / Formalisation). Les scripts d’install demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO sur `:9000` en HTTP) et, une fois HTTPS activé, [`docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml) (MinIO en `127.0.0.1:19000`, Nginx termine le TLS sur `:443` et `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
+L’update exige un snapshot chiffré complet avant de modifier le code ; si le snapshot échoue, l’update s’arrête. `SKIP_BACKUP=1` reste une dérogation explicite. Le script préserve l’URL Git `origin` de l’instance (`REPO_URL=...` permet de la remplacer), puis contrôle le démarrage, applique les migrations et synchronise les rôles et filiales. Un échec de migration, synchronisation ou health check interrompt l’opération. Les installateurs refusent d’écraser un `.env` existant : utilisez l’update pour une instance déjà configurée. Ils demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO sur `:9000` en HTTP) et, une fois HTTPS activé, [`docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml) (MinIO en `127.0.0.1:19000`, Nginx termine le TLS sur `:443` et `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
+
+#### Première mise à jour d’une installation ancienne
+
+Si le serveur possède une ancienne version des scripts de déploiement, actualisez d’abord le dépôt pour installer le nouveau script de sauvegarde chiffrée et le nouvel updater. Cette opération ne redémarre pas les conteneurs ; l’updater effectuera ensuite le snapshot avant de reconstruire l’application :
+
+```bash
+sudo git -C /opt/finflow fetch origin main
+sudo git -C /opt/finflow checkout main
+sudo git -C /opt/finflow pull --ff-only origin main
+sudo bash /opt/finflow/deploy/ubuntu-update.sh
+```
+
+Si le dépôt utilise une autre branche ou un autre répertoire, adaptez `main` et `/opt/finflow`. Les commandes s’arrêtent en cas de modifications locales qui empêchent le fast-forward ; sauvegardez-les et résolvez-les avant de relancer.
 
 ---
 
@@ -74,7 +87,8 @@ Internet → Nginx (443) → frontend:80 → API / SPA
 | CPU | 2 vCPU | 4 vCPU |
 | RAM | 8 Go | 16 Go |
 | Disque | 40 Go SSD | 80 Go+ SSD |
-| OS | Ubuntu 22.04 / 24.04 LTS 64-bit | idem |
+| OS | Ubuntu 22.04 / 24.04 / 26.04 LTS 64-bit | idem |
+| Docker Compose | 2.24.4 minimum (`!override` requis par les fichiers Compose) | version stable fournie par le dépôt Docker |
 | Réseau | IP publique + DNS A/AAAA | domaine dédié |
 
 Ports à prévoir (firewall) :
@@ -563,14 +577,14 @@ sudo bash /opt/finflow/deploy/ubuntu-update.sh --check /opt/finflow
 Options utiles :
 
 ```bash
-# Sans dump DB préalable
-SKIP_BACKUP=1 sudo finflow-update
+# Sans snapshot préalable (dérogation à réserver aux cas maîtrisés)
+sudo env SKIP_BACKUP=1 finflow-update
 
 # Branche / répertoire personnalisés
 GIT_BRANCH=main INSTALL_DIR=/opt/finflow sudo -E bash /opt/finflow/deploy/ubuntu-update.sh
 ```
 
-Le script détecte automatiquement le mode **domaine** ou **IP** (`.finflow-deploy-mode`, `.finflow-tls-mode`, ou heuristique `.env`) via [`deploy/compose-files.sh`](../deploy/compose-files.sh).
+Le script détecte automatiquement le mode **domaine** ou **IP** (`.finflow-deploy-mode`, `.finflow-tls-mode`, ou heuristique `.env`) via [`deploy/compose-files.sh`](../deploy/compose-files.sh). Il contrôle Docker Compose 2.24.4 ou supérieur et conserve le dépôt Git `origin` configuré par défaut.
 
 ### 10.2 Commandes manuelles
 
@@ -685,7 +699,7 @@ journalctl -u nginx -u docker -n 100 --no-pager
 
 | Catégorie | Outils |
 |-----------|--------|
-| OS | Ubuntu 22.04 / 24.04 LTS |
+| OS | Ubuntu 22.04 / 24.04 / 26.04 LTS |
 | Conteneurs | Docker Engine, Compose plugin, Buildx |
 | Proxy / TLS | Nginx, Certbot, OpenSSL |
 | Sécurité | UFW, Fail2ban |

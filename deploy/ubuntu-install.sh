@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================================
-# FIN_FLOW — déploiement interactif Ubuntu (22.04 / 24.04 LTS)
+# FIN_FLOW — déploiement interactif Ubuntu (22.04 / 24.04 / 26.04 LTS)
 #
 # Usage (depuis une machine Ubuntu, avec sudo) :
 #   # Cloner d'abord FinFlow2.0 avec un accès GitHub autorisé, puis :
@@ -22,6 +22,7 @@ REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 DEPLOY_MODE="domain"
+TLS_READY=0
 
 # Couleurs (si TTY)
 if [[ -t 1 ]]; then
@@ -90,22 +91,36 @@ rand_fernet_key() {
   openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'
 }
 
+validate_fernet_key() {
+  printf '%s' "$1" | python3 -c '
+import base64, re, sys
+key = sys.stdin.read()
+if not re.fullmatch(r"[A-Za-z0-9_-]{43}=", key):
+    raise SystemExit(1)
+try:
+    raw = base64.urlsafe_b64decode(key)
+except (ValueError, base64.binascii.Error):
+    raise SystemExit(1)
+raise SystemExit(0 if len(raw) == 32 else 1)
+'
+}
+
 rand_password() {
-  # Mot de passe alphanumérique + symboles sûrs pour .env / URL
-  openssl rand -base64 32 | tr -d '/+=' | head -c 28
+  # Hex URL-safe pour .env, URLs PostgreSQL et MC_HOST MinIO.
+  openssl rand -hex 18
   echo
 }
 
 escape_env() {
-  # Échappe les valeurs pour un fichier .env KEY="value"
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+  # Les valeurs Compose single-quoted sont littérales, notamment les $ des mots de passe SMTP.
+  printf '%s' "$1" | sed "s/'/\\\\'/g"
 }
 
 env_line() {
   # env_line KEY value → KEY="escaped"
   local key="$1"
   local val="$2"
-  printf '%s="%s"\n' "$key" "$(escape_env "$val")"
+  printf "%s='%s'\n" "$key" "$(escape_env "$val")"
 }
 
 detect_ubuntu() {
@@ -116,8 +131,8 @@ detect_ubuntu() {
   . /etc/os-release
   [[ "${ID:-}" == "ubuntu" ]] || die "Ce script cible Ubuntu (détecté: ${ID:-inconnu})."
   case "${VERSION_ID:-}" in
-    22.04|24.04) ok "Ubuntu ${VERSION_ID} détecté." ;;
-    *) warn "Ubuntu ${VERSION_ID:-?} — testé sur 22.04 / 24.04 LTS." ;;
+    22.04|24.04|26.04) ok "Ubuntu ${VERSION_ID} LTS détecté." ;;
+    *) warn "Ubuntu ${VERSION_ID:-?} — cibles LTS prévues : 22.04, 24.04 et 26.04." ;;
   esac
 }
 
@@ -137,23 +152,42 @@ install_base_packages() {
 
 install_docker() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    ok "Docker déjà installé : $(docker --version)"
-    return
+    local compose_version
+    compose_version="$(docker compose version --short 2>/dev/null)"
+    compose_version="${compose_version#v}"
+    if dpkg --compare-versions "$compose_version" ge 2.24.4; then
+      systemctl enable --now docker
+      ok "Docker déjà installé : $(docker --version), Compose ${compose_version}"
+      return
+    fi
+    warn "Docker Compose ${compose_version} est trop ancien ; installation de la version requise (≥ 2.24.4)."
   fi
   log "Installation Docker Engine + Compose plugin…"
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  chmod a+r /etc/apt/keyrings/docker.gpg
+    -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
   # shellcheck disable=SC1091
   . /etc/os-release
-  echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
-    > /etc/apt/sources.list.d/docker.list
+  local ubuntu_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  [[ -n "$ubuntu_codename" ]] || die "Nom de version Ubuntu introuvable pour le dépôt Docker."
+  rm -f /etc/apt/sources.list.d/docker.list
+  cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: ${ubuntu_codename}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
   apt-get update -y
   apt-get install -y docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin
+  local compose_version
+  compose_version="$(docker compose version --short 2>/dev/null)"
+  compose_version="${compose_version#v}"
+  dpkg --compare-versions "$compose_version" ge 2.24.4 \
+    || die "Docker Compose ${compose_version:-inconnu} ne prend pas en charge !override (2.24.4 requis)."
   systemctl enable --now docker
   ok "Docker installé."
 }
@@ -187,12 +221,23 @@ prepare_install_dir() {
   local repo="$2"
   local branch="$3"
 
+  [[ ! -e "$dir/.env" ]] || die "Un .env existe déjà dans $dir. L'installateur refuse d'écraser les secrets ; utilisez ubuntu-update.sh."
   mkdir -p "$dir"
   if [[ -f "$dir/docker-compose.yml" && -f "$dir/docker-compose.prod.yml" ]]; then
-    log "Projet déjà présent dans $dir — git pull…"
-    git -C "$dir" fetch --all --prune || true
-    git -C "$dir" checkout "$branch" || true
-    git -C "$dir" pull --ff-only origin "$branch" || warn "git pull échoué (déploiement local ?)."
+    [[ -d "$dir/.git" ]] || die "Le projet présent dans $dir n'est pas un dépôt Git."
+    log "Projet déjà présent dans $dir — synchronisation stricte de $branch…"
+    if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+      git -C "$dir" remote set-url origin "$repo"
+    else
+      git -C "$dir" remote add origin "$repo"
+    fi
+    git -C "$dir" fetch origin "$branch" --prune
+    if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
+      git -C "$dir" checkout "$branch"
+    else
+      git -C "$dir" checkout --track -b "$branch" "origin/$branch"
+    fi
+    git -C "$dir" pull --ff-only origin "$branch"
   else
     if [[ -n "$(ls -A "$dir" 2>/dev/null || true)" ]]; then
       die "Le répertoire $dir n'est pas vide et ne contient pas FinFlow."
@@ -206,7 +251,7 @@ prepare_install_dir() {
   if [[ -n "${SCRIPT_SRC}" && -f "${SCRIPT_SRC}/docker-compose.prod.yml" \
         && "${SCRIPT_SRC}" != "$dir" && "${USE_LOCAL_COPY:-0}" == "1" ]]; then
     log "Copie locale demandée depuis ${SCRIPT_SRC}…"
-    rsync -a --exclude '.git' --exclude 'node_modules' --exclude '.venv' \
+    rsync -a --exclude '.git' --exclude '.env' --exclude 'node_modules' --exclude '.venv' \
       "${SCRIPT_SRC}/" "$dir/"
   fi
 
@@ -216,6 +261,7 @@ prepare_install_dir() {
 write_env_file() {
   local dir="$1"
   local env_file="$dir/.env"
+  [[ ! -e "$env_file" ]] || die "Refus d'écraser le fichier de secrets existant : $env_file"
 
   {
     echo "# Généré par deploy/ubuntu-install.sh — $(date -Iseconds)"
@@ -344,6 +390,7 @@ setup_tls() {
       return
     }
   systemctl reload nginx
+  TLS_READY=1
   ok "TLS Let's Encrypt actif."
 }
 
@@ -352,7 +399,7 @@ start_stack() {
   cd "$dir"
   log "Build & démarrage Docker Compose (prod)…"
   # shellcheck disable=SC2086
-  docker compose $COMPOSE_FILES pull || true
+  docker compose $COMPOSE_FILES pull
   # shellcheck disable=SC2086
   docker compose $COMPOSE_FILES up -d --build
   ok "Stack démarrée."
@@ -366,7 +413,8 @@ start_stack() {
     fi
     sleep 5
   done
-  warn "Health check encore en échec — vérifiez : docker compose $COMPOSE_FILES logs backend"
+  docker compose $COMPOSE_FILES logs --tail=100 backend db minio frontend || true
+  die "L'API n'est pas saine après le démarrage. Corrigez les logs avant de poursuivre."
 }
 
 write_helpers() {
@@ -414,21 +462,18 @@ post_deploy_commands() {
   log "Post-déploiement : migrations, rôles, bootstrap filiales…"
   # shellcheck disable=SC2086
   docker compose $COMPOSE_FILES exec -T backend \
-    python manage.py migrate --noinput \
-    && ok "Migrations OK." \
-    || warn "migrate à relancer."
+    python manage.py migrate --noinput
+  ok "Migrations OK."
 
   # shellcheck disable=SC2086
   docker compose $COMPOSE_FILES exec -T backend \
-    python manage.py sync_role_packs \
-    && ok "Packs de rôles synchronisés." \
-    || warn "sync_role_packs à relancer plus tard."
+    python manage.py sync_role_packs
+  ok "Packs de rôles synchronisés."
 
   # shellcheck disable=SC2086
   docker compose $COMPOSE_FILES exec -T backend \
-    python manage.py bootstrap_all_tenants \
-    && ok "Filiales bootstrapées (circuits ML / Dation / Formalisation)." \
-    || warn "bootstrap_all_tenants : aucune filiale encore, ou à relancer après création."
+    python manage.py bootstrap_all_tenants
+  ok "Filiales bootstrapées (circuits ML / Dation / Formalisation)."
 
   log "Vérification pile e-mail (cryptography, backend SMTP, worker)…"
   # shellcheck disable=SC2086
@@ -460,15 +505,17 @@ print('OK DEFAULT_FROM_EMAIL=', settings.DEFAULT_FROM_EMAIL)
 }
 
 print_summary() {
+  local scheme="http"
+  [[ "$TLS_READY" == "1" ]] && scheme="https"
   cat <<EOF
 
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
 ${C_OK} FIN_FLOW — déploiement terminé${C_RST}
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
 
-  Application : https://${APP_DOMAIN}
-  API health  : https://${APP_DOMAIN}/api/v1/health/
-  MinIO       : https://${MINIO_DOMAIN}
+  Application : ${scheme}://${APP_DOMAIN}
+  API health  : ${scheme}://${APP_DOMAIN}/api/v1/health/
+  MinIO       : ${scheme}://${MINIO_DOMAIN}
   Répertoire  : ${INSTALL_DIR}
   Compose     : finflow ps   |   finflow logs -f backend
 
@@ -520,25 +567,32 @@ collect_inputs() {
   [[ -n "$MINIO_DOMAIN" ]] || die "Le domaine MinIO est obligatoire."
 
   GEN_PG="$(rand_password | tr -d '\n')"
-  prompt_secret "Mot de passe PostgreSQL (utilisateur finflow)" "$GEN_PG"
+  prompt_secret "Mot de passe PostgreSQL (lettres, chiffres, . _ - ~)" "$GEN_PG"
   POSTGRES_PASSWORD="$REPLY"
   [[ ${#POSTGRES_PASSWORD} -ge 12 ]] || die "Mot de passe PostgreSQL trop court (≥ 12)."
+  [[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]] || die "Mot de passe PostgreSQL : utilisez uniquement lettres, chiffres, point, tiret, underscore ou tilde (URL PostgreSQL)."
 
   prompt "Utilisateur MinIO (root)" "finflow_minio_admin"
   MINIO_ROOT_USER="$REPLY"
+  [[ "$MINIO_ROOT_USER" =~ ^[A-Za-z0-9_-]{3,20}$ ]] || die "Utilisateur MinIO : 3 à 20 caractères alphanumériques, underscore ou tiret."
   GEN_MINIO="$(rand_password | tr -d '\n')"
-  prompt_secret "Mot de passe MinIO" "$GEN_MINIO"
+  prompt_secret "Mot de passe MinIO (lettres, chiffres, . _ - ~)" "$GEN_MINIO"
   MINIO_ROOT_PASSWORD="$REPLY"
   [[ ${#MINIO_ROOT_PASSWORD} -ge 12 ]] || die "Mot de passe MinIO trop court (≥ 12)."
+  [[ "$MINIO_ROOT_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]] || die "Mot de passe MinIO : utilisez uniquement lettres, chiffres, point, tiret, underscore ou tilde."
 
   GEN_DJANGO="$(rand_secret)"
   prompt_secret "DJANGO_SECRET_KEY" "$GEN_DJANGO"
   DJANGO_SECRET_KEY="$REPLY"
+  [[ ${#DJANGO_SECRET_KEY} -ge 40 ]] || die "DJANGO_SECRET_KEY doit contenir au moins 40 caractères."
+  case "${DJANGO_SECRET_KEY,,}" in
+    *change-me*|*insecure*|secret|changeme) die "DJANGO_SECRET_KEY est une valeur interdite en production." ;;
+  esac
 
   GEN_FERNET="$(rand_fernet_key)"
   prompt_secret "FIELD_ENCRYPTION_KEY (chiffrement mots de passe SMTP filiale)" "$GEN_FERNET"
   FIELD_ENCRYPTION_KEY="$REPLY"
-  [[ -n "$FIELD_ENCRYPTION_KEY" ]] || die "FIELD_ENCRYPTION_KEY obligatoire."
+  validate_fernet_key "$FIELD_ENCRYPTION_KEY" || die "FIELD_ENCRYPTION_KEY doit être une clé Fernet valide (32 octets encodés en base64 URL-safe)."
 
   echo
   SMTP_GLOBAL_CONFIGURED=0
@@ -615,6 +669,7 @@ main() {
   echo
 
   collect_inputs
+  [[ ! -e "$INSTALL_DIR/.env" ]] || die "Une installation existe déjà dans $INSTALL_DIR. Utilisez deploy/ubuntu-update.sh pour la mettre à jour."
   install_base_packages
   install_docker
   systemctl enable --now fail2ban || true
