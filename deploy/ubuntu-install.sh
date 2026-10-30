@@ -18,7 +18,7 @@
 # =========================================================================
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow2.0.git"
+REPO_URL_DEFAULT="${REPO_URL:-https://github.com/Bouma-J/FinFlow2.0.git}"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 DEPLOY_MODE="domain"
@@ -551,7 +551,7 @@ collect_inputs() {
   prompt "URL du dépôt Git" "$REPO_URL_DEFAULT"
   REPO_URL="$REPLY"
 
-  prompt "Branche Git" "main"
+  prompt "Branche Git" "${GIT_BRANCH:-main}"
   GIT_BRANCH="$REPLY"
 
   prompt "Domaine applicatif (ex. finflow.exemple.tld)" ""
