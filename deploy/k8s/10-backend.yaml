@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: finflow-backend:latest
+          image: registry.example.com/finflow/backend@sha256:REPLACE_WITH_64_HEX_DIGEST
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -24,16 +24,29 @@ spec:
                 name: finflow-config
             - secretRef:
                 name: finflow-secrets
+          env:
+            - name: RUN_MIGRATIONS
+              value: "0"
           readinessProbe:
             httpGet:
               path: /api/v1/health/
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: finflow.example.com
+                - name: X-Forwarded-Proto
+                  value: https
             initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /api/v1/health/
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: finflow.example.com
+                - name: X-Forwarded-Proto
+                  value: https
             initialDelaySeconds: 40
             periodSeconds: 20
           resources:
@@ -48,6 +61,19 @@ apiVersion: v1
 kind: Service
 metadata:
   name: finflow-backend
+  namespace: finflow
+spec:
+  selector:
+    app: finflow-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Alias attendu par frontend/nginx.conf pour les routes API internes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
   namespace: finflow
 spec:
   selector:

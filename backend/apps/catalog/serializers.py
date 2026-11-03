@@ -26,7 +26,9 @@ class ProductCategorySerializer(serializers.ModelSerializer):
 
 
 class CreditProductSerializer(serializers.ModelSerializer):
-    category_label = serializers.CharField(source="category.label", read_only=True)
+    category_label = serializers.CharField(
+        source="category.label", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = CreditProduct
@@ -39,29 +41,14 @@ class CreditProductSerializer(serializers.ModelSerializer):
             "cbs_credit_product", "cbs_repayment_product",
             "is_active",
         ]
-        read_only_fields = ["id", "cbs_product_code", "cbs_repayment_product_code", "cbs_repayment_product"]
+        read_only_fields = [
+            "id",
+            "cbs_repayment_product_code",
+            "cbs_credit_product",
+            "cbs_repayment_product",
+        ]
 
     def validate(self, attrs):
-        for field in ("cbs_product_code", "cbs_repayment_product_code", "cbs_repayment_product"):
-            attr = field + "_id" if field in {"cbs_credit_product", "cbs_repayment_product"} else field
-            if field in self.initial_data and str(self.initial_data[field] or "") != str(getattr(self.instance, attr, "") or ""):
-                raise serializers.ValidationError({field: "Sélectionnez un produit crédit CBS confirmé ; les codes historiques ne remplacent pas les correspondances du dossier."})
-        from apps.common.tenancy import get_current_tenant_id
-        from apps.corebanking.services import resolve_active_connector, CoreBankingError
-
-        ref = attrs.get("cbs_credit_product", getattr(self.instance, "cbs_credit_product", None))
-        if ref:
-            tid = get_current_tenant_id()
-            try:
-                connector = resolve_active_connector(tid)
-            except CoreBankingError:
-                connector = None
-            currency = attrs.get("currency", getattr(self.instance, "currency", ""))
-            if (str(ref.tenant_id) != str(tid) or ref.kind != "CREDIT" or not ref.is_active
-                    or ref.verification_status != "VERIFIED" or not ref.verified_at or not ref.verified_by_id
-                    or not ref.source_reference.strip() or not connector or ref.connector_id != connector.pk
-                    or (ref.currency and ref.currency != currency)):
-                raise serializers.ValidationError({"cbs_credit_product": "Sélectionnez une référence crédit active, confirmée et compatible avec cette filiale, ce connecteur et cette devise."})
         amount_min = attrs.get("amount_min")
         amount_max = attrs.get("amount_max")
         if amount_min is not None and amount_max is not None and amount_min > amount_max:
@@ -69,6 +56,9 @@ class CreditProductSerializer(serializers.ModelSerializer):
                 "Le montant minimum ne peut excéder le montant maximum."
             )
         return attrs
+
+    def validate_cbs_product_code(self, value):
+        return value.strip()
 
 class CbsProductReferenceSerializer(serializers.ModelSerializer):
     class Meta:

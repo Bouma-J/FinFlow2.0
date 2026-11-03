@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # --- Étape 1 : build de l'application ---
-FROM node:24-alpine AS build
+ARG NODE_BUILD_IMAGE=node:24-alpine
+ARG NGINX_RUNTIME_IMAGE=nginx:1.30-alpine
+FROM ${NODE_BUILD_IMAGE} AS build
 WORKDIR /app
 # Certificats CA d'entreprise (proxy à inspection TLS) pour npm.
 # Hors proxy le dossier peut ne contenir que .gitkeep.
@@ -14,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # --- Étape 2 : service statique via Nginx ---
-FROM nginx:1.30-alpine AS runtime
+FROM ${NGINX_RUNTIME_IMAGE} AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

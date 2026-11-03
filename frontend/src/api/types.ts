@@ -931,8 +931,8 @@ export interface CreditProduct {
   code: string;
   label: string;
   description?: string;
-  category: string;
-  category_label: string;
+  category?: string | null;
+  category_label?: string | null;
   client_type?: "INDIVIDUAL" | "PROFESSIONAL" | "CORPORATE" | "ALL";
   currency: string;
   amount_min: string;

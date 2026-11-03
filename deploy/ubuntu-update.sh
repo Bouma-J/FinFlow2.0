@@ -30,6 +30,13 @@
 set -euo pipefail
 
 INSTALL_DIR_DEFAULT="/opt/finflow"
+UPDATE_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+UPDATE_SOURCE_ROOT="$(cd "$UPDATE_SOURCE_DIR/.." && pwd)"
+UPDATE_PHASE="préparation"
+PREVIOUS_SHA=""
+LAST_BACKUP=""
+UPDATE_IN_PROGRESS=0
+BACKUP_TOOL_DIR=""
 
 if [[ -t 1 ]]; then
   C_INFO='\033[1;36m'
@@ -50,6 +57,16 @@ ok()   { echo -e "${C_OK}[OK]${C_RST} $*"; }
 warn() { echo -e "${C_WARN}[WARN]${C_RST} $*"; }
 err()  { echo -e "${C_ERR}[ERR]${C_RST} $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+update_exit_notice() {
+  local rc=$?
+  if [[ "$rc" -ne 0 && "$UPDATE_IN_PROGRESS" == "1" ]]; then
+    warn "Mise à jour interrompue à l'étape '${UPDATE_PHASE}'. Révision précédente : ${PREVIOUS_SHA:-inconnue}."
+    [[ -z "$LAST_BACKUP" ]] || warn "Snapshot pré-update : $LAST_BACKUP"
+    warn "Ne revenez pas manuellement à l'ancien code après le début des migrations ; restaurez d'abord le snapshot si le schéma a changé."
+  fi
+}
+trap update_exit_notice EXIT
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -120,15 +137,85 @@ compose() {
 
 backup_db() {
   local dir="$1"
-  local script="${dir}/deploy/backup/backup.sh"
+  local script="${BACKUP_TOOL_DIR:-$dir/deploy/backup}/backup.sh"
   [[ -f "$script" ]] || die "Script de snapshot complet absent : $script. Mise à jour interrompue."
   grep -q 'encrypt_snapshot_archive' "$script" \
     || die "Le script de sauvegarde installé est ancien et ne chiffre pas le snapshot complet. Mettez les scripts à jour avant l'update."
-  log "Snapshot chiffré pré-update (Postgres + MinIO + secrets)"
-  FINFLOW_DIR="$dir" BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}" \
+  log "Snapshot chiffré pré-update (Postgres + MinIO + configuration .env)"
+  local output
+  output="$(FINFLOW_DIR="$dir" BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}" \
     SKIP_APP_PAUSE="${SKIP_APP_PAUSE:-0}" \
-    bash "$script" || die "Le snapshot pré-update a échoué. Aucune mise à jour n'a été appliquée."
+    bash "$script")" || die "Le snapshot pré-update a échoué. Aucune mise à jour applicative n'a été appliquée."
+  echo "$output"
+  LAST_BACKUP="$(tail -n 1 <<< "$output")"
+  [[ -f "$LAST_BACKUP" ]] || die "Le snapshot pré-update n'a pas produit une archive lisible."
+  FINFLOW_DIR="$dir" bash "${BACKUP_TOOL_DIR:-$dir/deploy/backup}/verify.sh" "$LAST_BACKUP" \
+    || die "Le snapshot pré-update n'a pas passé le contrôle d'intégrité. Mise à jour applicative annulée."
   ok "Snapshot pré-update chiffré OK"
+}
+
+backup_tools_ready() {
+  local dir="$1"
+  [[ -f "$dir/backup.sh" && -f "$dir/lib.sh" && -f "$dir/verify.sh" ]] \
+    && grep -q 'encrypt_snapshot_archive' "$dir/backup.sh" \
+    && grep -q '^encrypt_snapshot_archive()' "$dir/lib.sh" \
+    && grep -q '^decrypt_snapshot_archive()' "$dir/lib.sh" \
+    && grep -q 'decrypt_snapshot_archive' "$dir/verify.sh"
+}
+
+bootstrap_backup_tools() {
+  local dir="$1" source="$UPDATE_SOURCE_ROOT/deploy/backup" target="$dir/deploy/backup"
+  if backup_tools_ready "$target"; then
+    BACKUP_TOOL_DIR="$target"
+    return 0
+  fi
+  backup_tools_ready "$source" \
+    || die "Les outils de sauvegarde installés sont anciens. Téléchargez une copie récente du dépôt et lancez depuis celle-ci : sudo bash <copie>/deploy/ubuntu-update.sh $dir"
+  [[ "$UPDATE_SOURCE_ROOT" != "$dir" ]] \
+    || die "Cette copie ne peut pas créer un snapshot chiffré avec les outils déjà installés. Téléchargez une copie récente du dépôt hors de $dir et lancez son ubuntu-update.sh."
+  BACKUP_TOOL_DIR="$source"
+  warn "Utilisation temporaire des outils de sauvegarde récents depuis $source ; le dépôt installé ne sera pas modifié avant le snapshot."
+}
+
+ensure_backup_passphrase() {
+  local file="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}"
+  [[ ! -L "$file" ]] || die "Le fichier de phrase de passe est un lien symbolique : $file"
+  if [[ ! -s "$file" ]]; then
+    install -d -m 0700 "$(dirname "$file")"
+    umask 077
+    openssl rand -base64 32 > "$file"
+    chmod 600 "$file"
+    warn "Phrase de chiffrement créée dans $file. Copiez-la dans un coffre sécurisé hors de ce serveur."
+  fi
+  chmod 600 "$file"
+}
+
+ensure_runtime_image_env() {
+  local dir="$1" env_file="$1/.env"
+  python3 - "$env_file" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+defaults = {
+    "POSTGRES_IMAGE": "postgres:16-alpine",
+    "REDIS_IMAGE": "redis:7-alpine",
+    "MINIO_IMAGE": "cgr.dev/chainguard/minio:latest",
+    "MINIO_CLIENT_IMAGE": "cgr.dev/chainguard/minio-client:latest",
+    "PYTHON_BASE_IMAGE": "python:3.12-slim",
+    "NODE_BUILD_IMAGE": "node:24-alpine",
+    "NGINX_RUNTIME_IMAGE": "nginx:1.30-alpine",
+}
+present = {line.split("=", 1)[0].strip() for line in text.splitlines() if "=" in line and not line.lstrip().startswith("#")}
+missing = [(key, value) for key, value in defaults.items() if key not in present]
+if missing:
+    with path.open("a", encoding="utf-8") as env_file:
+        env_file.write("\n# Images de déploiement ; utiliser des versions/digests approuvés.\n")
+        for key, value in missing:
+            env_file.write(f"{key}='{value}'\n")
+    path.chmod(0o600)
+    print("Paramètres d'images ajoutés au .env : " + ", ".join(key for key, _ in missing))
+PY
 }
 
 ensure_mail_env() {
@@ -237,6 +324,7 @@ chmod_deploy_scripts() {
     "$dir/deploy/compose-files.sh" \
     2>/dev/null || true
   chmod +x "$dir/deploy/tls-ip/enable-ip-tls.sh" 2>/dev/null || true
+  chmod +x "$dir/deploy/lan-firewall.sh" 2>/dev/null || true
   chmod +x "$dir/deploy/backup/"*.sh 2>/dev/null || true
 }
 
@@ -260,8 +348,20 @@ wait_health() {
   log "Attente health API (max ~3 min)…"
   local i
   for i in $(seq 1 36); do
-    if curl -fsS http://127.0.0.1:8080/api/v1/health/ >/dev/null 2>&1; then
-      ok "API prête : http://127.0.0.1:8080/api/v1/health/"
+    local running
+    running="$(compose ps --status running --services 2>/dev/null || true)"
+    if curl -fsS http://127.0.0.1:8080/api/v1/health/ >/dev/null 2>&1 \
+      && curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1 \
+      && printf '%s\n' "$running" | grep -qx backend \
+      && printf '%s\n' "$running" | grep -qx worker \
+      && printf '%s\n' "$running" | grep -qx beat \
+      && printf '%s\n' "$running" | grep -qx frontend \
+      && printf '%s\n' "$running" | grep -qx db \
+      && printf '%s\n' "$running" | grep -qx minio \
+      && printf '%s\n' "$running" | grep -qx redis \
+      && compose exec -T db pg_isready -U finflow >/dev/null 2>&1 \
+      && compose exec -T redis redis-cli ping 2>/dev/null | grep -qx PONG; then
+      ok "API, frontend, DB, Redis, worker et beat disponibles."
       return 0
     fi
     sleep 5
@@ -316,15 +416,34 @@ ensure_backup_cron() {
   local dir="$1"
   [[ -f "$dir/deploy/backup/wire-install.sh" ]] \
     || die "deploy/backup/wire-install.sh manquant — sauvegarde automatique obligatoire."
-  bash "$dir/deploy/backup/wire-install.sh" "$dir" \
+  BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/root/.finflow-backup-pass}" \
+    bash "$dir/deploy/backup/wire-install.sh" "$dir" \
     || die "Cron de sauvegarde non posé (/var/backups/finflow)."
+}
+
+ensure_lan_firewall() {
+  local dir="$1" cidr ports
+  local marker="$dir/.finflow-lan-cidr"
+  if [[ -s "$marker" ]]; then
+    cidr="$(tr -d '[:space:]' < "$marker")"
+  else
+    cidr="$(bash "$dir/deploy/lan-firewall.sh" detect-default-cidr)"
+    warn "CIDR LAN absent ; détection automatique du réseau local : ${cidr}"
+  fi
+  cidr="$(bash "$dir/deploy/lan-firewall.sh" validate-cidr "$cidr")" \
+    || die "CIDR LAN invalide (${cidr:-vide}). Renseignez $marker avant de continuer."
+  ports="22 80 443 9000"
+  bash "$dir/deploy/lan-firewall.sh" apply "$cidr" "$ports" "$dir/deploy/lan-firewall.sh"
+  printf '%s\n' "$cidr" > "$marker"
+  chmod 644 "$marker"
 }
 
 print_summary() {
   local dir="$1"
-  local mode="" tls=""
+  local mode="" tls="" lan_cidr=""
   [[ -f "$dir/.finflow-deploy-mode" ]] && mode="$(tr -d '[:space:]' < "$dir/.finflow-deploy-mode")"
   [[ -f "$dir/.finflow-tls-mode" ]] && tls="$(tr -d '[:space:]' < "$dir/.finflow-tls-mode")"
+  [[ -f "$dir/.finflow-lan-cidr" ]] && lan_cidr="$(tr -d '[:space:]' < "$dir/.finflow-lan-cidr")"
   cat <<EOF
 
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
@@ -333,6 +452,7 @@ ${C_OK}════════════════════════�
 
   Répertoire : ${dir}
   Mode       : ${mode:-inconnu}${tls:+ + TLS ${tls}}
+  Accès LAN  : ${lan_cidr:-CIDR à vérifier}
   Compose    : docker compose ${COMPOSE_FILES}
   Commandes  : finflow ps | finflow logs -f backend
   Prochaine  : sudo finflow-update   (ou sudo bash ${dir}/deploy/ubuntu-update.sh)
@@ -457,19 +577,31 @@ main() {
 
   require_compose_version
   COMPOSE_FILES="$(detect_compose_files "$dir")"
+  PREVIOUS_SHA="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || true)"
+  UPDATE_IN_PROGRESS=1
   log "Install dir : $dir"
   log "Compose     : docker compose $COMPOSE_FILES"
   log "Branche     : $branch"
-  ensure_mail_env "$dir"
+  bootstrap_backup_tools "$dir"
+  if [[ "$skip_git" == "1" && "$BACKUP_TOOL_DIR" != "$dir/deploy/backup" ]]; then
+    die "SKIP_GIT=1 interdit ici : les outils de sauvegarde installés sont anciens. Lancez l'update normal pour les actualiser après le snapshot."
+  fi
 
   if [[ "$skip_backup" != "1" ]]; then
-    ensure_backup_cron "$dir"
+    UPDATE_PHASE="préparation du snapshot"
+    ensure_backup_passphrase
+    UPDATE_PHASE="snapshot pré-update"
     backup_db "$dir"
   else
     warn "SKIP_BACKUP=1 — pas de dump DB."
   fi
 
+  UPDATE_PHASE="mise à niveau de la configuration"
+  ensure_mail_env "$dir"
+  ensure_runtime_image_env "$dir"
+
   if [[ "$skip_git" != "1" ]]; then
+    UPDATE_PHASE="récupération du code"
     pull_code "$dir" "$branch" "$repo"
   else
     warn "SKIP_GIT=1 — pas de git pull."
@@ -478,13 +610,21 @@ main() {
   chmod_deploy_scripts "$dir"
   COMPOSE_FILES="$(detect_compose_files "$dir")"
   log "Compose (après pull) : docker compose $COMPOSE_FILES"
+  UPDATE_PHASE="application des règles d'accès LAN"
+  ensure_lan_firewall "$dir"
   ensure_backup_cron "$dir"
 
+  UPDATE_PHASE="reconstruction des services"
   rebuild_stack "$dir" "$with_build"
+  UPDATE_PHASE="contrôles de santé"
   wait_health
+  UPDATE_PHASE="migrations et initialisation applicative"
   post_deploy "$dir"
+  UPDATE_PHASE="actualisation des wrappers"
   refresh_helpers "$dir"
+  UPDATE_PHASE="contrôle final de santé"
   wait_health
+  UPDATE_IN_PROGRESS=0
   print_summary "$dir"
 }
 

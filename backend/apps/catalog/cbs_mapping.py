@@ -83,22 +83,35 @@ def resolve_application_cbs(application, *, connector=None):
         error("currency", "La devise du dossier ne correspond pas à celle du produit local.")
     products = {}
     if requires_real:
-        # Le cURL positif distingue explicitement le produit crédit (1) de
-        # l'objet de financement (30). Ne jamais substituer l'objet au produit.
-        pk = getattr(product, "cbs_credit_product_id", None)
-        ref = CbsProductReference.all_tenants.filter(pk=pk, tenant_id=tid).first() if pk else None
-        valid = bool(ref and ref.kind == "CREDIT" and ref.is_active and ref.verification_status == "VERIFIED"
-                     and ref.verified_at and ref.verified_by_id and ref.source_reference.strip()
-                     and ref.cbs_code.strip() and not is_demo_product_code(ref.cbs_code)
-                     and connector and ref.connector_id == connector.pk
-                     and (not ref.currency or ref.currency == application.currency))
-        if valid:
-            products["cbs_credit_product"] = {"id": str(ref.pk), "cbs_code": ref.cbs_code.strip(), "label": ref.label,
-                "source": "cbs_credit_products", "connector_id": str(ref.connector_id), "source_reference": ref.source_reference,
-                "verified_at": ref.verified_at.isoformat(), "verified_by": str(ref.verified_by_id)}
+        # CBS ne fournit pas de catalogue crédit exploitable : l'ID est saisi
+        # directement sur le produit local. Ne jamais le déduire de l'objet.
+        credit_code = (getattr(product, "cbs_product_code", "") or "").strip()
+        credit_source = "credit_product.cbs_product_code"
+        if not credit_code or is_demo_product_code(credit_code):
+            # Compatibilité avec les produits déjà associés à une référence
+            # CBS confirmée avant l'introduction de la saisie directe.
+            pk = getattr(product, "cbs_credit_product_id", None)
+            ref = CbsProductReference.all_tenants.filter(pk=pk, tenant_id=tid).first() if pk else None
+            valid_legacy_ref = bool(
+                ref and ref.kind == "CREDIT" and ref.is_active
+                and ref.verification_status == "VERIFIED" and ref.verified_at
+                and ref.verified_by_id and ref.source_reference.strip()
+                and ref.cbs_code.strip() and not is_demo_product_code(ref.cbs_code)
+                and connector and ref.connector_id == connector.pk
+                and (not ref.currency or ref.currency == application.currency)
+            )
+            if valid_legacy_ref:
+                credit_code = ref.cbs_code.strip()
+                credit_source = "legacy_confirmed_reference"
+
+        if credit_code and not is_demo_product_code(credit_code):
+            products["cbs_credit_product"] = {
+                "cbs_code": credit_code,
+                "source": credit_source,
+            }
         else:
             products["cbs_credit_product"] = {}
-            error("product.cbs_credit_product", "Sélectionnez le produit crédit CBS confirmé dans le paramétrage du produit local ; il est distinct de l'objet de financement du dossier.")
+            error("product.cbs_product_code", "Saisissez l'identifiant CBS réel idProduitCrd dans le produit local ; il est distinct de l'objet de financement du dossier.")
         products["cbs_repayment_product"] = {**mechanism, "source": "repayment_methods"}
     else:
         # Compatibilité des scénarios explicitement locaux existants.
@@ -173,7 +186,7 @@ def cbs_mapping_snapshot(application):
     resolved = resolve_application_cbs(application)
     return {"connector_id": resolved["connector_id"], "values": resolved["values"],
             "identifier_policy": "PRIMARY_CBS_IDENTIFIER" if resolved["requires_real"] else "LOCAL_LEGACY",
-            "mapping_contract": "CREDIT_PRODUCT_FINANCING_OBJECT_REPAYMENT_METHOD_V2" if resolved["requires_real"] else "LOCAL_LEGACY",
+            "mapping_contract": "MANUAL_CREDIT_PRODUCT_ID_FINANCING_OBJECT_REPAYMENT_METHOD_V3" if resolved["requires_real"] else "LOCAL_LEGACY",
             "credit_product": resolved["credit_product"], "repayment_product": resolved["repayment_product"],
             "financing_object_id": resolved["financing_object"].get("id")}
 

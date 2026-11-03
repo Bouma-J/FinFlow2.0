@@ -95,7 +95,7 @@ def test_invalid_credit_product_never_falls_back_to_financing_object(mapped, fie
     resolved = resolve_application_cbs(app)
     assert resolved["product_cbs_code"] == ""
     assert not resolved["ready_for_cbs"]
-    with pytest.raises(CoreBankingError, match="product.cbs_credit_product"):
+    with pytest.raises(CoreBankingError, match="product.cbs_product_code"):
         build_credit_disbursement_payload(app, connector=conn)
 
 
@@ -148,17 +148,14 @@ def test_obsolete_product_codes_do_not_override_selected_catalogs(mapped):
     assert payload["idProduitRemb"] == "202"
 
 
-def test_old_product_fields_cannot_configure_real_mapping(mapped):
+def test_manual_credit_product_id_configures_real_mapping(mapped):
     from apps.catalog.serializers import CreditProductSerializer
     app, conn = mapped
     with tenant_context(app.tenant_id):
         serializer = CreditProductSerializer(app.product, data={"cbs_product_code": "OVERRIDE"}, partial=True)
-        assert not serializer.is_valid()
-        assert "cbs_product_code" in serializer.errors
-        serializer = CreditProductSerializer(app.product, data={"label": "Produit local modifié"}, partial=True)
         assert serializer.is_valid(), serializer.errors
         serializer.save()
-    assert build_credit_disbursement_payload(app, connector=conn)["idProduitCrd"] == "101"
+    assert build_credit_disbursement_payload(app, connector=conn)["idProduitCrd"] == "OVERRIDE"
 
 
 def test_mechanism_identifier_is_configurable_and_used(mapped):

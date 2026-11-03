@@ -11,7 +11,9 @@ source "${SCRIPT_DIR}/lib.sh"
 SNAP="${1:-}"
 [[ -n "$SNAP" ]] || die "Usage: $0 /chemin/du/snapshot|archive.gpg"
 SNAP_WORK=""
+SECRET_TMP=""
 cleanup_snapshot_temp() {
+  [[ -z "$SECRET_TMP" ]] || rm -f "$SECRET_TMP"
   [[ -z "$SNAP_WORK" ]] || rm -rf "$SNAP_WORK"
 }
 trap cleanup_snapshot_temp EXIT
@@ -79,7 +81,10 @@ PY
 
 if command -v docker >/dev/null 2>&1; then
   log "TOC pg_restore (liste des objets)"
-  docker run --rm -v "$(host_path "$SNAP"):/snap:ro" postgres:16-alpine \
+  instance_dir="$(finflow_dir)"
+  postgres_image="${POSTGRES_IMAGE:-$(load_dotenv_value "$instance_dir/.env" POSTGRES_IMAGE)}"
+  postgres_image="${postgres_image:-postgres:16-alpine}"
+  docker run --rm -v "$(host_path "$SNAP"):/snap:ro" "$postgres_image" \
     pg_restore -l /snap/postgres.dump >/dev/null
   ok "TOC Postgres lisible"
 else
@@ -88,15 +93,15 @@ fi
 
 if [[ -f "${SNAP}/secrets.env.enc" ]]; then
   if resolve_passphrase; then
-    TMP="$(mktemp_host "$SNAP")"
-    decrypt_secrets_file "${SNAP}/secrets.env.enc" "$TMP"
-    if grep -q '^FIELD_ENCRYPTION_KEY=' "$TMP"; then
+    SECRET_TMP="$(mktemp_host)"
+    decrypt_secrets_file "${SNAP}/secrets.env.enc" "$SECRET_TMP"
+    if grep -q '^FIELD_ENCRYPTION_KEY=' "$SECRET_TMP"; then
       ok "Secrets déchiffrables (FIELD_ENCRYPTION_KEY présent)"
     else
-      rm -f "$TMP"
       die "Secrets déchiffrés mais FIELD_ENCRYPTION_KEY absent"
     fi
-    rm -f "$TMP"
+    rm -f "$SECRET_TMP"
+    SECRET_TMP=""
   else
     warn "Pas de passphrase : secrets non déchiffrés (checksum déjà vérifié)"
   fi

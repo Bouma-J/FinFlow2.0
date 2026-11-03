@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: finflow-backend:latest
+          image: registry.example.com/finflow/backend@sha256:REPLACE_WITH_64_HEX_DIGEST
           imagePullPolicy: IfNotPresent
           command: ["celery", "-A", "config", "worker", "-l", "info"]
           env:
@@ -51,7 +51,7 @@ spec:
     spec:
       containers:
         - name: beat
-          image: finflow-backend:latest
+          image: registry.example.com/finflow/backend@sha256:REPLACE_WITH_64_HEX_DIGEST
           imagePullPolicy: IfNotPresent
           command: ["celery", "-A", "config", "beat", "-l", "info"]
           env:
@@ -87,7 +87,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: finflow-frontend:latest
+          image: registry.example.com/finflow/frontend@sha256:REPLACE_WITH_64_HEX_DIGEST
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -96,6 +96,13 @@ spec:
               path: /
               port: 80
             periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
 ---
 apiVersion: v1
 kind: Service
@@ -116,7 +123,12 @@ metadata:
   namespace: finflow
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.2.203.0/24"
 spec:
+  tls:
+    - hosts:
+        - finflow.example.com
+      secretName: finflow-tls
   rules:
     - host: finflow.example.com
       http:
@@ -128,7 +140,21 @@ spec:
                 name: finflow-backend
                 port:
                   number: 8000
-          - path: /admin
+          - path: /django-admin
+            pathType: Prefix
+            backend:
+              service:
+                name: finflow-backend
+                port:
+                  number: 8000
+          - path: /static
+            pathType: Prefix
+            backend:
+              service:
+                name: finflow-backend
+                port:
+                  number: 8000
+          - path: /media
             pathType: Prefix
             backend:
               service:

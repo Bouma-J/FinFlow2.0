@@ -2,17 +2,15 @@
 # =========================================================================
 # FIN_FLOW — déploiement Ubuntu par adresse IP (sans nom de domaine)
 #
-# Cible principale : réseau interne (IP privée, sans DNS).
-# HTTP par défaut. HTTPS optionnel :
-#   • IP privée    → certificat auto-signé, HSTS désactivé (cas prévu)
-#   • IP publique  → Let's Encrypt (certificat IP, ~6 jours) + HSTS 7 jours
+# Cible : réseau interne (adresse privée et CIDR LAN requis).
+# HTTP par défaut. HTTPS optionnel avec certificat auto-signé.
 #   sudo bash deploy/tls-ip/enable-ip-tls.sh /opt/finflow --self-signed
 #
 # Usage :
 #   # Cloner d'abord FinFlow2.0 avec un accès GitHub autorisé, puis :
 #   sudo bash deploy/ubuntu-install-ip.sh
 #
-# Variante avec domaines + TLS :
+# Variante avec noms DNS internes :
 #   sudo bash deploy/ubuntu-install.sh
 #
 # Mise à jour d'une instance déjà déployée :
@@ -26,7 +24,8 @@ COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 DEPLOY_MODE="ip"
 ENABLE_TLS=0
 TLS_MODE=""
-LETSENCRYPT_EMAIL=""
+LAN_CIDR=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -t 1 ]]; then
   C_INFO='\033[1;36m'
@@ -43,6 +42,16 @@ ok()   { echo -e "${C_OK}[OK]${C_RST} $*"; }
 warn() { echo -e "${C_WARN}[WARN]${C_RST} $*"; }
 err()  { echo -e "${C_ERR}[ERR]${C_RST} $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+installation_exit_notice() {
+  local rc=$?
+  local dir="${INSTALL_DIR:-}"
+  if [[ "$rc" -ne 0 && -n "$dir" && -f "$dir/.env" && -f "$dir/.finflow-install-state" ]]; then
+    echo "[WARN] Installation interrompue ; secrets et données conservés. Reprise : sudo bash $dir/deploy/ubuntu-install-ip.sh --resume $dir" >&2
+    echo "[INFO] Si le téléchargement d'une image échoue, adaptez MINIO_IMAGE / MINIO_CLIENT_IMAGE dans $dir/.env avant la reprise." >&2
+  fi
+}
+trap installation_exit_notice EXIT
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -134,13 +143,40 @@ detect_default_ip() {
 }
 
 is_ipv4() {
-  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress, sys
+ip = ipaddress.ip_address(sys.argv[1])
+raise SystemExit(0 if isinstance(ip, ipaddress.IPv4Address) else 1)
+PY
 }
 
 is_private_ip() {
-  [[ "$1" =~ ^10\. ]] || [[ "$1" =~ ^192\.168\. ]] || [[ "$1" =~ ^127\. ]] \
-    || [[ "$1" =~ ^169\.254\. ]] \
-    || [[ "$1" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress, sys
+ip = ipaddress.ip_address(sys.argv[1])
+ranges = map(ipaddress.ip_network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+raise SystemExit(0 if any(ip in net for net in ranges) else 1)
+PY
+}
+
+valid_image_ref() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]]; }
+
+detect_default_lan_cidr() {
+  bash "$SCRIPT_DIR/lan-firewall.sh" detect-default-cidr
+}
+
+validate_lan_settings() {
+  LAN_CIDR="$(bash "$SCRIPT_DIR/lan-firewall.sh" validate-cidr "$LAN_CIDR")" \
+    || die "CIDR LAN invalide : $LAN_CIDR"
+  ip -4 -o addr show scope global | awk '$2 !~ /^(docker|br-|veth)/ {split($4, a, "/"); print a[1]}' \
+    | grep -Fxq "$APP_IP" || die "L'adresse ${APP_IP} n'est pas attribuée à une interface LAN du serveur."
+  python3 - "$APP_IP" "$LAN_CIDR" <<'PY' >/dev/null 2>&1 \
+    || die "L'adresse IP FinFlow doit appartenir au réseau LAN privé autorisé ($LAN_CIDR)."
+import ipaddress, sys
+ip = ipaddress.ip_address(sys.argv[1])
+net = ipaddress.ip_network(sys.argv[2])
+raise SystemExit(0 if ip in net and ip.is_private else 1)
+PY
 }
 
 detect_ubuntu() {
@@ -167,7 +203,7 @@ install_base_packages() {
     git unzip jq htop net-tools openssl ufw fail2ban \
     dnsutils rsync openssh-server \
     nginx
-  ok "Paquets système installés (Certbot uniquement si HTTPS Let's Encrypt)."
+  ok "Paquets système installés."
 }
 
 install_docker() {
@@ -213,23 +249,11 @@ EOF
 }
 
 configure_ufw() {
-  log "Configuration UFW (SSH / 80 / 9000 MinIO${ENABLE_TLS:+ / 443})…"
-  ufw default deny incoming
-  ufw default allow outgoing
-  if ufw app list 2>/dev/null | grep -qx 'OpenSSH'; then
-    ufw allow OpenSSH
-  else
-    warn "Profil UFW OpenSSH introuvable — ouverture du port 22/tcp."
-    ufw allow 22/tcp
-  fi
-  ufw allow 80/tcp
-  ufw allow 9000/tcp
-  if [[ "${ENABLE_TLS:-0}" -eq 1 ]]; then
-    ufw allow 443/tcp
-  fi
-  ufw --force enable
-  ufw status verbose || true
-  ok "Pare-feu UFW actif."
+  local ports="22 80 9000"
+  [[ "${ENABLE_TLS:-0}" -eq 1 ]] && ports="${ports} 443"
+  log "Restriction UFW et Docker au LAN ${LAN_CIDR}…"
+  bash "$INSTALL_DIR/deploy/lan-firewall.sh" apply "$LAN_CIDR" "$ports" \
+    "$INSTALL_DIR/deploy/lan-firewall.sh"
 }
 
 prepare_install_dir() {
@@ -288,6 +312,13 @@ write_env_file() {
     env_line DJANGO_CORS_ALLOWED_ORIGINS "$base_url"
     env_line FRONTEND_BASE_URL "$base_url"
     env_line FINFLOW_PUBLIC_IP "$APP_IP"
+    env_line POSTGRES_IMAGE "${POSTGRES_IMAGE:-postgres:16-alpine}"
+    env_line REDIS_IMAGE "${REDIS_IMAGE:-redis:7-alpine}"
+    env_line MINIO_IMAGE "$MINIO_IMAGE"
+    env_line MINIO_CLIENT_IMAGE "$MINIO_CLIENT_IMAGE"
+    env_line PYTHON_BASE_IMAGE "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+    env_line NODE_BUILD_IMAGE "${NODE_BUILD_IMAGE:-node:24-alpine}"
+    env_line NGINX_RUNTIME_IMAGE "${NGINX_RUNTIME_IMAGE:-nginx:1.30-alpine}"
     echo 'SEED_DEMO="0"'
     echo 'SMTP_SSL_VERIFY="1"'
     env_line FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
@@ -313,6 +344,61 @@ write_env_file() {
 
   chmod 600 "$env_file"
   ok "Fichier .env écrit (${env_file})."
+}
+
+write_install_state() {
+  local dir="$1"
+  printf '%s\n' "$LAN_CIDR" > "$dir/.finflow-lan-cidr"
+  chmod 644 "$dir/.finflow-lan-cidr"
+  {
+    printf 'LAN_CIDR=%s\n' "$LAN_CIDR"
+    printf 'TLS_MODE=%s\n' "$TLS_MODE"
+  } > "$dir/.finflow-install-state"
+  chmod 600 "$dir/.finflow-install-state"
+}
+
+resume_install() {
+  local dir="${1:-$INSTALL_DIR_DEFAULT}" key value
+  [[ -f "$dir/.env" ]] || die "Aucun .env à reprendre dans $dir. Relancez l'installation normale."
+  [[ -f "$dir/.finflow-install-state" ]] || die "État de reprise absent : $dir/.finflow-install-state. L'installation est trop ancienne pour une reprise automatique."
+  [[ -f "$dir/deploy/lan-firewall.sh" ]] || die "Script LAN manquant dans $dir/deploy/lan-firewall.sh. Actualisez le dépôt avant reprise."
+  INSTALL_DIR="$dir"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      LAN_CIDR) LAN_CIDR="$value" ;;
+      TLS_MODE) TLS_MODE="$value" ;;
+    esac
+  done < "$dir/.finflow-install-state"
+  APP_IP="$(python3 - "$dir/.env" <<'PY'
+import sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.startswith("FINFLOW_PUBLIC_IP="):
+        value = line.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        print(value)
+        break
+PY
+)"
+  [[ -n "$APP_IP" && -n "$LAN_CIDR" ]] || die "IP ou CIDR LAN absent du fichier de reprise."
+  validate_lan_settings
+  ENABLE_TLS=0
+  [[ "$TLS_MODE" == "selfsigned" ]] && ENABLE_TLS=1
+
+  log "Reprise de l'installation partielle dans $dir"
+  install_docker
+  systemctl enable --now nginx
+  systemctl enable --now fail2ban 2>/dev/null || true
+  configure_ufw
+  write_nginx_ip "$APP_IP"
+  write_helpers "$dir"
+  start_stack "$dir"
+  post_deploy_commands "$dir"
+  if [[ "$ENABLE_TLS" -eq 1 && ! -f "$dir/.finflow-tls-mode" ]]; then
+    bash "$dir/deploy/tls-ip/enable-ip-tls.sh" "$dir" --self-signed
+  fi
+  rm -f "$dir/.finflow-install-state"
+  print_summary
 }
 
 write_nginx_ip() {
@@ -461,14 +547,8 @@ print_summary() {
   if [[ "${ENABLE_TLS:-0}" -eq 1 ]]; then
     scheme="https"
     title="déploiement IP / HTTPS terminé"
-    if [[ "${TLS_MODE}" == "le" ]]; then
-      extra_tls="  TLS          : Let's Encrypt (IP, ~6 jours) · HSTS 7 jours
-  Renouveler   : sudo certbot certificates
+    extra_tls="  TLS          : certificat auto-signé (avertissement navigateur) · HSTS off
 "
-    else
-      extra_tls="  TLS          : certificat auto-signé (avertissement navigateur) · HSTS off
-"
-    fi
   fi
   cat <<EOF
 
@@ -499,13 +579,12 @@ ${extra_tls}
 
   Conservez précieusement le fichier ${INSTALL_DIR}/.env (secrets,
   dont FIELD_ENCRYPTION_KEY — ne pas régénérer après sauvegarde de mots de passe SMTP).
+  Copiez aussi /root/.finflow-backup-pass dans un coffre sécurisé hors serveur.
 
   HTTPS plus tard (instance déjà en HTTP) :
-    sudo bash ${INSTALL_DIR}/deploy/tls-ip/enable-ip-tls.sh ${INSTALL_DIR}
-    # IP privée : ajouter --self-signed
-    # IP publique : --lets-encrypt --email vous@exemple.tld
+    sudo bash ${INSTALL_DIR}/deploy/tls-ip/enable-ip-tls.sh ${INSTALL_DIR} --self-signed
 
-  Passage ultérieur en domaines + TLS :
+  Passage ultérieur à des noms DNS internes :
     sudo bash ${INSTALL_DIR}/deploy/ubuntu-install.sh
 
 EOF
@@ -514,7 +593,7 @@ EOF
 collect_inputs() {
   echo
   echo "========== Déploiement FIN_FLOW par IP =========="
-  echo "  Sans domaine DNS · HTTP ou HTTPS (certificat IP / auto-signé)"
+  echo "  Sans domaine DNS · IP privée · HTTP ou HTTPS auto-signé"
   echo
 
   prompt "Répertoire d'installation" "$INSTALL_DIR_DEFAULT"
@@ -530,6 +609,17 @@ collect_inputs() {
   prompt "Adresse IP d'accès (IPv4)" "${DEFAULT_IP}"
   APP_IP="$REPLY"
   is_ipv4 "$APP_IP" || die "Adresse IPv4 invalide : ${APP_IP}"
+  is_private_ip "$APP_IP" || die "Le mode LAN exige une adresse privée RFC1918 (10/8, 172.16/12 ou 192.168/16)."
+  prompt "CIDR du réseau local autorisé" "$(detect_default_lan_cidr)"
+  LAN_CIDR="$REPLY"
+  validate_lan_settings
+
+  prompt "Image MinIO accessible depuis ce serveur" "${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}"
+  MINIO_IMAGE="$REPLY"
+  valid_image_ref "$MINIO_IMAGE" || die "Référence d'image MinIO invalide."
+  prompt "Image du client MinIO (mc) accessible depuis ce serveur" "${MINIO_CLIENT_IMAGE:-cgr.dev/chainguard/minio-client:latest}"
+  MINIO_CLIENT_IMAGE="$REPLY"
+  valid_image_ref "$MINIO_CLIENT_IMAGE" || die "Référence d'image minio-client invalide."
 
   GEN_PG="$(rand_password | tr -d '\n')"
   prompt_secret "Mot de passe PostgreSQL (lettres, chiffres, . _ - ~)" "$GEN_PG"
@@ -595,30 +685,19 @@ collect_inputs() {
   echo
   ENABLE_TLS=0
   TLS_MODE=""
-  LETSENCRYPT_EMAIL=""
   if is_private_ip "$APP_IP"; then
     if ask_yes_no "Activer HTTPS (certificat auto-signé, avertissement navigateur, sans HSTS) ?" "y"; then
       ENABLE_TLS=1
       TLS_MODE="selfsigned"
     fi
-  else
-    if ask_yes_no "Activer HTTPS (Let's Encrypt sur l'IP, HSTS 7 jours) ?" "y"; then
-      ENABLE_TLS=1
-      TLS_MODE="le"
-      prompt "E-mail Let's Encrypt (avis d'expiration)" ""
-      LETSENCRYPT_EMAIL="$REPLY"
-      [[ -n "$LETSENCRYPT_EMAIL" ]] || die "E-mail Let's Encrypt obligatoire."
-    fi
   fi
 
   echo
-  SETUP_UFW=0
-  ask_yes_no "Configurer UFW (SSH / 80 / 9000${ENABLE_TLS:+ / 443}) ?" "y" && SETUP_UFW=1
+  SETUP_UFW=1
 
   local url_scheme="http"
   local tls_label="HTTP (sans TLS)"
   [[ "$ENABLE_TLS" -eq 1 ]] && url_scheme="https"
-  [[ "$TLS_MODE" == "le" ]] && tls_label="HTTPS Let's Encrypt + HSTS 7j"
   [[ "$TLS_MODE" == "selfsigned" ]] && tls_label="HTTPS auto-signé (HSTS off)"
 
   echo
@@ -627,6 +706,7 @@ collect_inputs() {
   echo "  Install dir  : $INSTALL_DIR"
   echo "  Repo/branch  : $REPO_URL @ $GIT_BRANCH"
   echo "  IP d'accès   : $APP_IP"
+  echo "  LAN autorisé : $LAN_CIDR"
   echo "  URL app      : ${url_scheme}://${APP_IP}/"
   echo "  MinIO        : ${url_scheme}://${APP_IP}:9000/"
   echo "  DB user      : finflow"
@@ -642,6 +722,12 @@ main() {
   need_root
   detect_ubuntu
 
+  if [[ "${1:-}" == "--resume" ]]; then
+    shift
+    resume_install "${1:-$INSTALL_DIR_DEFAULT}"
+    return
+  fi
+
   echo
   echo "FIN_FLOW — installateur Ubuntu par IP (HTTP ou HTTPS sans domaine)"
   echo "Variante domaines + TLS : deploy/ubuntu-install.sh"
@@ -654,26 +740,22 @@ main() {
   install_docker
   systemctl enable --now fail2ban || true
 
-  [[ "$SETUP_UFW" -eq 1 ]] && configure_ufw
-
   prepare_install_dir "$INSTALL_DIR" "$REPO_URL" "$GIT_BRANCH"
   write_env_file "$INSTALL_DIR"
+  write_install_state "$INSTALL_DIR"
   write_helpers "$INSTALL_DIR"
+  configure_ufw
   write_nginx_ip "$APP_IP"
   start_stack "$INSTALL_DIR"
   post_deploy_commands "$INSTALL_DIR"
 
   if [[ "${ENABLE_TLS:-0}" -eq 1 ]]; then
-    local tls_args=()
-    if [[ "$TLS_MODE" == "le" ]]; then
-      tls_args+=(--lets-encrypt --email "$LETSENCRYPT_EMAIL")
-    else
-      tls_args+=(--self-signed)
-    fi
+    local tls_args=(--self-signed)
     log "Activation HTTPS (${TLS_MODE})…"
     bash "$INSTALL_DIR/deploy/tls-ip/enable-ip-tls.sh" "$INSTALL_DIR" "${tls_args[@]}"
   fi
 
+  rm -f "$INSTALL_DIR/.finflow-install-state"
   print_summary
 }
 

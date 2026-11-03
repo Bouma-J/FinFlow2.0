@@ -4,7 +4,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 
 import { api } from "@/api/client";
 import { allCbsReferences } from "@/api/cbs";
-import type { CbsProductReference, CreditProduct, Paginated, ProductCategory } from "@/api/types";
+import type { CbsProductReference, CreditProduct, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import {
@@ -17,7 +17,6 @@ import {
 } from "@/components/ListFilters";
 import {
   Badge,
-  Card,
   PageHeader,
   QueryStatus,
   TenantScopeNotice,
@@ -32,11 +31,21 @@ const CLIENT_TYPES: { value: string; label: string }[] = [
   { value: "CORPORATE", label: "Entreprise" },
 ];
 
+const DEMO_CBS_PRODUCT_CODES = new Set([
+  "CRED-TRESO",
+  "CRED-TRESO-PRO",
+  "CRED-IMMO",
+  "CRED-IMMO-PROMO",
+  "CRED-CONSO",
+  "CRED-EQUIP",
+  "CRED-AGRO",
+  "COMPTE-COURANT",
+]);
+
 const EMPTY_PROD = {
   code: "",
   label: "",
   description: "",
-  category: "",
   client_type: "ALL",
   currency: "XOF",
   amount_min: "100000",
@@ -46,7 +55,7 @@ const EMPTY_PROD = {
   interest_rate: "12.5",
   processing_fee_rate: "0",
   requires_guarantee: false,
-  cbs_credit_product: "",
+  cbs_product_code: "",
   is_active: true,
 };
 
@@ -83,42 +92,41 @@ function clientTypeLabel(value?: string) {
   return CLIENT_TYPES.find((t) => t.value === value)?.label ?? "Tous";
 }
 
+function creditCbsCode(
+  product: CreditProduct,
+  references: CbsProductReference[] = [],
+) {
+  const code = product.cbs_product_code?.trim() || "";
+  const legacyCode = references.find(
+    (reference) => reference.id === product.cbs_credit_product,
+  )?.cbs_code;
+  if (code && !DEMO_CBS_PRODUCT_CODES.has(code.toUpperCase())) return code;
+  if (legacyCode && !DEMO_CBS_PRODUCT_CODES.has(legacyCode.toUpperCase())) {
+    return legacyCode;
+  }
+  return code;
+}
+
 export function AdminProductsPage() {
   const { user, activeTenant } = useAuth();
   const qc = useQueryClient();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
-  const canViewCategories = hasPerm(user, "catalog.view_productcategory");
-  const canAddCategory = hasPerm(user, "catalog.add_productcategory");
-  const canAddProduct = hasPerm(user, "catalog.add_creditproduct") && canViewCategories;
+  const canAddProduct = hasPerm(user, "catalog.add_creditproduct");
   const canChangeProduct = hasPerm(user, "catalog.change_creditproduct");
 
-  const [cat, setCat] = useState({ code: "", label: "" });
   const [prod, setProd] = useState({ ...EMPTY_PROD });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
   const [clientTypeFilter, setClientTypeFilter] = useState("");
   const [showInactive, setShowInactive] = useState(false);
-
-  const categories = useQuery({
-    queryKey: ["product-categories", activeTenant],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<ProductCategory>>("/product-categories/", {
-          params: { page_size: 200 },
-        })
-      ).data,
-    enabled: !needsTenant && canViewCategories,
-  });
 
   const products = useQuery({
     queryKey: [
       "credit-products",
       activeTenant,
       search,
-      categoryFilter,
       clientTypeFilter,
       showInactive,
     ],
@@ -128,7 +136,6 @@ export function AdminProductsPage() {
           params: {
             page_size: 200,
             ...(search.trim() ? { search: search.trim() } : {}),
-            ...(categoryFilter ? { category: categoryFilter } : {}),
             ...(clientTypeFilter ? { client_type: clientTypeFilter } : {}),
             ...(showInactive ? {} : { is_active: true }),
           },
@@ -160,19 +167,11 @@ export function AdminProductsPage() {
       "filiale sélectionnée"
     : "votre filiale";
 
-  const createCat = useMutation({
-    mutationFn: async () => (await api.post("/product-categories/", cat)).data,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["product-categories"] });
-      setCat({ code: "", label: "" });
-    },
-  });
-
   const saveProd = useMutation({
     mutationFn: async () => {
       const payload = {
         ...prod,
-        cbs_credit_product: prod.cbs_credit_product || null,
+        cbs_product_code: prod.cbs_product_code.trim(),
         duration_min_months: Number(prod.duration_min_months),
         duration_max_months: Number(prod.duration_max_months),
       };
@@ -202,19 +201,18 @@ export function AdminProductsPage() {
   function openCreate() {
     if (!canAddProduct) return;
     setEditingId(null);
-    setProd({ ...EMPTY_PROD, category: categories.data?.results[0]?.id ?? "" });
+    setProd({ ...EMPTY_PROD });
     setError(null);
     setShowForm(true);
   }
 
   function openEdit(p: CreditProduct) {
-    if (!canChangeProduct || !canViewCategories) return;
+    if (!canChangeProduct) return;
     setEditingId(p.id);
     setProd({
       code: p.code,
       label: p.label,
       description: p.description ?? "",
-      category: p.category,
       client_type: p.client_type ?? "ALL",
       currency: p.currency,
       amount_min: p.amount_min,
@@ -224,7 +222,7 @@ export function AdminProductsPage() {
       interest_rate: p.interest_rate,
       processing_fee_rate: p.processing_fee_rate ?? "0",
       requires_guarantee: Boolean(p.requires_guarantee),
-      cbs_credit_product: p.cbs_credit_product ?? "",
+      cbs_product_code: creditCbsCode(p, cbsProducts.data ?? []),
       is_active: p.is_active,
     });
     setError(null);
@@ -249,7 +247,7 @@ export function AdminProductsPage() {
       <PageHeader
         icon={Package}
         title="Produits de crédit"
-        subtitle={`Familles, bornes et mapping CBS — ${scopeLabel}`}
+        subtitle={`Produits, conditions et identifiants CBS — ${scopeLabel}`}
         actions={canAddProduct ? (
           <button
             type="button"
@@ -285,7 +283,7 @@ export function AdminProductsPage() {
           <FormBlock
             icon={Package}
             title="Identité"
-            description="Code unique, famille et clientèle cible."
+            description="Code unique, libellé et clientèle cible."
           >
             <div className="form-grid two-col">
               <label className="field">
@@ -304,23 +302,6 @@ export function AdminProductsPage() {
                   onChange={(e) => setProd({ ...prod, label: e.target.value })}
                   required
                 />
-              </label>
-              <label className="field">
-                <span>Famille *</span>
-                <select
-                  value={prod.category}
-                  onChange={(e) =>
-                    setProd({ ...prod, category: e.target.value })
-                  }
-                  required
-                >
-                  <option value="">— choisir —</option>
-                  {categories.data?.results.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
               </label>
               <label className="field">
                 <span>Type de client</span>
@@ -460,19 +441,22 @@ export function AdminProductsPage() {
           <FormBlock
             icon={Layers}
             title="Mapping CBS"
-            description="Le produit crédit CBS est paramétré ici ; l’objet de financement reste sélectionné dans chaque dossier."
+            description="Saisissez l’identifiant fourni par le CBS ; il sera envoyé dans idProduitCrd."
           >
             <label className="field">
-              <span>Produit crédit CBS</span>
-              <select value={prod.cbs_credit_product} onChange={(e) => setProd({ ...prod, cbs_credit_product: e.target.value })}>
-                <option value="">À configurer avant mise en place</option>
-                {prod.cbs_credit_product && !cbsProducts.data?.some((r) => r.id === prod.cbs_credit_product) && <option value={prod.cbs_credit_product}>Référence à vérifier</option>}
-                {cbsProducts.data?.filter((r) => !r.currency || r.currency === prod.currency).map((r) => <option key={r.id} value={r.id}>{r.label} — {r.cbs_code}</option>)}
-              </select>
+              <span>Identifiant produit crédit CBS (idProduitCrd)</span>
+              <input
+                value={prod.cbs_product_code}
+                onChange={(e) =>
+                  setProd({ ...prod, cbs_product_code: e.target.value })
+                }
+                maxLength={64}
+                placeholder="Ex. 6"
+                autoComplete="off"
+              />
             </label>
-            <p>Les références crédit et leurs justificatifs se renseignent dans <a href="/admin/referentiels-cbs">Référentiels CBS → Produits crédit</a>.</p>
+            <p className="muted small">Aucun catalogue CBS n’est disponible pour importer ces identifiants. Renseignez ici le code exact communiqué par l’équipe CBS ; il est nécessaire pour une mise en place en mode CBS réel.</p>
             <p>Le code de remboursement provient du mécanisme configuré dans le dossier. Aucun objet de financement n’est utilisé comme produit crédit par défaut.</p>
-            {cbsProducts.isError && <p className="form-error">Chargement des références crédit impossible.</p>}
           </FormBlock>
 
           {error && <div className="form-error">{error}</div>}
@@ -504,64 +488,6 @@ export function AdminProductsPage() {
         </form>
       )}
 
-      <Card title="Familles de produits">
-        {canAddCategory && (
-        <form
-          className="inline-form row"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            createCat.mutate();
-          }}
-        >
-          <label className="field">
-            <span>Code</span>
-            <input
-              value={cat.code}
-              onChange={(e) => setCat({ ...cat, code: e.target.value })}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Libellé</span>
-            <input
-              value={cat.label}
-              onChange={(e) => setCat({ ...cat, label: e.target.value })}
-              required
-            />
-          </label>
-          <button
-            className="btn btn-primary btn-sm"
-            disabled={createCat.isPending}
-          >
-            Ajouter
-          </button>
-        </form>
-        )}
-        {!canAddCategory && canViewCategories && (
-          <p className="muted small">Droit catalog.add_productcategory requis pour ajouter une famille.</p>
-        )}
-        {!canViewCategories && (
-          <p className="muted small">Droit catalog.view_productcategory requis pour consulter les familles et créer un produit.</p>
-        )}
-        <div className="catalog-chip-row">
-          {(categories.data?.results ?? []).map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`chip${categoryFilter === c.id ? " chip-active" : " chip-muted"}`}
-              onClick={() =>
-                setCategoryFilter((cur) => (cur === c.id ? "" : c.id))
-              }
-            >
-              {c.code} · {c.label}
-            </button>
-          ))}
-          {(categories.data?.results.length ?? 0) === 0 && (
-            <span className="muted small">Aucune famille pour l’instant.</span>
-          )}
-        </div>
-      </Card>
-
       <ListFilters
         search={
           <SearchInput
@@ -572,13 +498,11 @@ export function AdminProductsPage() {
         }
         activeCount={countActive(
           search,
-          categoryFilter,
           clientTypeFilter,
           showInactive,
         )}
         onReset={() => {
           setSearch("");
-          setCategoryFilter("");
           setClientTypeFilter("");
           setShowInactive(false);
         }}
@@ -590,16 +514,6 @@ export function AdminProductsPage() {
           />
         }
       >
-        <FilterField label="Famille" active={!!categoryFilter}>
-          <FilterSelect value={categoryFilter} onChange={setCategoryFilter}>
-            <option value="">Toutes</option>
-            {categories.data?.results.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
         <FilterField label="Clientèle" active={!!clientTypeFilter}>
           <FilterSelect value={clientTypeFilter} onChange={setClientTypeFilter}>
             <option value="">Tous types</option>
@@ -624,7 +538,6 @@ export function AdminProductsPage() {
             <thead>
               <tr>
                 <th>Produit</th>
-                <th>Famille</th>
                 <th>Clientèle</th>
                 <th className="num">Montant</th>
                 <th>Durée</th>
@@ -638,8 +551,8 @@ export function AdminProductsPage() {
               {(products.data?.results ?? []).map((p) => (
                 <tr
                   key={p.id}
-                className={canChangeProduct && canViewCategories ? "row-clickable" : undefined}
-                onClick={canChangeProduct && canViewCategories ? () => openEdit(p) : undefined}
+                className={canChangeProduct ? "row-clickable" : undefined}
+                onClick={canChangeProduct ? () => openEdit(p) : undefined}
                 >
                   <td>
                     <strong>{p.label}</strong>
@@ -648,7 +561,6 @@ export function AdminProductsPage() {
                       {p.requires_guarantee ? " · garantie exigée" : ""}
                     </div>
                   </td>
-                  <td>{p.category_label || "—"}</td>
                   <td>{clientTypeLabel(p.client_type)}</td>
                   <td className="num">
                     {formatMoney(p.amount_min, p.currency)}
@@ -662,7 +574,7 @@ export function AdminProductsPage() {
                   </td>
                   <td className="num">{p.interest_rate} %</td>
                   <td className="muted small">
-                    {cbsProducts.data?.find((r) => r.id === p.cbs_credit_product)?.cbs_code || "À configurer"}
+                    {creditCbsCode(p, cbsProducts.data ?? []) || "À configurer"}
                   </td>
                   <td>
                     <Badge
@@ -675,7 +587,7 @@ export function AdminProductsPage() {
                       className="row-actions"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canChangeProduct && canViewCategories && (
+                      {canChangeProduct && (
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"

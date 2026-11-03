@@ -33,7 +33,7 @@ Avant d’appeler le CBS, renseigner les **références croisées** :
 | Client | `cbs_client_id` | Matricule client CBS (dation, encours, mise en place `codeAdherent`) |
 | Client | `cbs_account_number` | Compte / `numManuel` pour mise en place |
 | Agence | `cbs_point_of_service_id` | `idPointService` Perfect |
-| Produit | `cbs_product_code` (/ `cbs_repayment_product_code`) | `idProduitCrd` (override `idProduitRemb`) |
+| Produit de crédit | `cbs_product_code`, saisi manuellement dans **Administration → Catalogue → Produits** | `idProduitCrd` |
 | Utilisateur | `cbs_id` (sinon `employee_id`) | `idGestionnaire` |
 | Périodicité | `LoanPeriodicity.cbs_code` | `idPeriodicite` |
 | Méthode remboursement | `RepaymentMethod.cbs_code` | `idProduitRemb` |
@@ -221,8 +221,8 @@ Après validation du dossier, l’action **Mettre en place / Valider la mise en 
 | `nombreEcheance` | durée × périodicité |
 | `idObjetFinancement` | `purpose_type` mappé (ex. `CONSUMPTION` → `CONSOMMATION`) |
 | `idGestionnaire` | `mapping_rules.disbursement.defaults.idGestionnaire` |
-| `idProduitCrd` | `product.cbs_product_code` (sinon `product.code`) |
-| `idProduitRemb` | `product.cbs_repayment_product_code` ou défaut connecteur |
+| `idProduitCrd` | `product.cbs_product_code`, saisi manuellement dans le produit local (aucun endpoint de catalogue produit crédit n’est disponible dans le CBS testé) |
+| `idProduitRemb` | `RepaymentMethod.cbs_code` du mécanisme choisi dans le dossier (mapping à revoir séparément) |
 | `montantDemande` | montant de référence (accordé) |
 | `codeDevise` | devise dossier |
 

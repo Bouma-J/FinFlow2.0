@@ -6,8 +6,8 @@
 #   # Cloner d'abord FinFlow2.0 avec un accès GitHub autorisé, puis :
 #   sudo bash deploy/ubuntu-install.sh
 #
-# Le script demande les domaines, mots de passe DB/MinIO, e-mail Certbot, etc.,
-# installe Docker/Nginx, génère le .env, démarre Compose prod, configure TLS.
+# Le script demande les noms DNS internes, les paramètres de secrets et le CIDR
+# LAN, installe Docker/Nginx et démarre Compose en accès réseau local.
 #
 # Variante sans domaine (accès par IP, HTTP ou HTTPS) :
 #   sudo bash deploy/ubuntu-install-ip.sh
@@ -22,7 +22,9 @@ REPO_URL_DEFAULT="${REPO_URL:-https://github.com/Bouma-J/FinFlow2.0.git}"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 DEPLOY_MODE="domain"
-TLS_READY=0
+LAN_CIDR=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR=""
 
 # Couleurs (si TTY)
 if [[ -t 1 ]]; then
@@ -40,6 +42,15 @@ ok()   { echo -e "${C_OK}[OK]${C_RST} $*"; }
 warn() { echo -e "${C_WARN}[WARN]${C_RST} $*"; }
 err()  { echo -e "${C_ERR}[ERR]${C_RST} $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+installation_exit_notice() {
+  local rc=$?
+  if [[ "$rc" -ne 0 && -n "${INSTALL_DIR:-}" && -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/.finflow-install-state" ]]; then
+    echo "[WARN] Installation interrompue ; secrets conservés. Reprise : sudo bash $INSTALL_DIR/deploy/ubuntu-install.sh --resume $INSTALL_DIR" >&2
+    echo "[INFO] Si une image ne peut pas être téléchargée, ajustez MINIO_IMAGE / MINIO_CLIENT_IMAGE dans $INSTALL_DIR/.env avant la reprise." >&2
+  fi
+}
+trap installation_exit_notice EXIT
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -115,6 +126,16 @@ escape_env() {
   # Les valeurs Compose single-quoted sont littérales, notamment les $ des mots de passe SMTP.
   printf '%s' "$1" | sed "s/'/\\\\'/g"
 }
+valid_image_ref() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]]; }
+
+valid_hostname() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import re, sys
+name = sys.argv[1].rstrip(".")
+label = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+raise SystemExit(0 if len(name) <= 253 and re.fullmatch(label + r"(?:\." + label + r")+", name) else 1)
+PY
+}
 
 env_line() {
   # env_line KEY value → KEY="escaped"
@@ -146,7 +167,7 @@ install_base_packages() {
     apt-transport-https software-properties-common \
     git unzip jq htop net-tools openssl ufw fail2ban \
     dnsutils rsync openssh-server \
-    nginx certbot python3-certbot-nginx
+    nginx
   ok "Paquets système installés."
 }
 
@@ -193,27 +214,66 @@ EOF
 }
 
 configure_ufw() {
-  log "Configuration UFW…"
-  ufw default deny incoming
-  ufw default allow outgoing
+  log "Restriction UFW au réseau local ${LAN_CIDR}…"
+  bash "$INSTALL_DIR/deploy/lan-firewall.sh" apply "$LAN_CIDR" "22 80 443" \
+    "$INSTALL_DIR/deploy/lan-firewall.sh"
+}
 
-  # Profil « OpenSSH » absent si openssh-server n'est pas installé (ex. certaines images cloud).
-  if ufw app list 2>/dev/null | grep -qx 'OpenSSH'; then
-    ufw allow OpenSSH
-  else
-    warn "Profil UFW OpenSSH introuvable — ouverture du port 22/tcp."
-    ufw allow 22/tcp
-  fi
+write_install_state() {
+  printf 'LAN_CIDR=%s\nTLS_MODE=\n' "$LAN_CIDR" > "$INSTALL_DIR/.finflow-install-state"
+  chmod 600 "$INSTALL_DIR/.finflow-install-state"
+}
 
-  ufw allow 80/tcp
-  ufw allow 443/tcp
-  # MinIO public uniquement si pas de sous-domaine HTTPS dédié
-  if [[ "${EXPOSE_MINIO_PORT:-0}" == "1" ]]; then
-    ufw allow 9000/tcp
+resume_install() {
+  local dir="${1:-$INSTALL_DIR_DEFAULT}" state_key state_value
+  [[ -f "$dir/.env" && -f "$dir/.finflow-install-state" ]] \
+    || die "Aucun état d'installation reprenable dans $dir."
+  [[ -f "$dir/deploy/lan-firewall.sh" ]] \
+    || die "Script LAN absent dans $dir ; actualisez le dépôt avant la reprise."
+  INSTALL_DIR="$dir"
+  LAN_CIDR="$(cat "$dir/.finflow-lan-cidr" 2>/dev/null || true)"
+  if [[ -z "$LAN_CIDR" ]]; then
+    while IFS='=' read -r state_key state_value; do
+      [[ "$state_key" == "LAN_CIDR" ]] && LAN_CIDR="$state_value"
+    done < "$dir/.finflow-install-state"
   fi
-  ufw --force enable
-  ufw status verbose || true
-  ok "Pare-feu UFW actif."
+  LAN_CIDR="$(bash "$dir/deploy/lan-firewall.sh" validate-cidr "$LAN_CIDR")" \
+    || die "CIDR LAN invalide dans l'état de reprise."
+  readarray -t domains < <(python3 - "$dir/.env" <<'PY'
+import sys
+values = {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    if "=" not in line or line.lstrip().startswith("#"):
+        continue
+    key, value = line.rstrip("\r\n").split("=", 1)
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    values[key] = value
+app = values.get("FRONTEND_BASE_URL", "")
+if "://" in app:
+    app = app.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+mini = values.get("AWS_S3_CUSTOM_DOMAIN", "").split(":", 1)[0]
+print(app)
+print(mini)
+PY
+)
+  APP_DOMAIN="${domains[0]:-}"
+  MINIO_DOMAIN="${domains[1]:-}"
+  valid_hostname "$APP_DOMAIN" || die "Domaine applicatif invalide dans $dir/.env"
+  valid_hostname "$MINIO_DOMAIN" || die "Domaine MinIO invalide dans $dir/.env"
+
+  log "Reprise de l'installation domaine dans $dir"
+  install_docker
+  systemctl enable --now nginx
+  systemctl enable --now fail2ban 2>/dev/null || true
+  write_helpers "$dir"
+  configure_ufw
+  write_nginx_http_only "$APP_DOMAIN" "$MINIO_DOMAIN"
+  start_stack "$dir"
+  post_deploy_commands "$dir"
+  rm -f "$dir/.finflow-install-state"
+  print_summary
 }
 
 prepare_install_dir() {
@@ -270,9 +330,16 @@ write_env_file() {
     env_line DJANGO_SECRET_KEY "$DJANGO_SECRET_KEY"
     echo 'DJANGO_DEBUG="False"'
     env_line DJANGO_ALLOWED_HOSTS "${APP_DOMAIN},localhost,127.0.0.1,backend"
-    echo 'DJANGO_SECURE_SSL_REDIRECT="True"'
-    env_line DJANGO_CORS_ALLOWED_ORIGINS "https://${APP_DOMAIN}"
-    env_line FRONTEND_BASE_URL "https://${APP_DOMAIN}"
+    echo 'DJANGO_SECURE_SSL_REDIRECT="False"'
+    env_line DJANGO_CORS_ALLOWED_ORIGINS "http://${APP_DOMAIN}"
+    env_line FRONTEND_BASE_URL "http://${APP_DOMAIN}"
+    env_line POSTGRES_IMAGE "${POSTGRES_IMAGE:-postgres:16-alpine}"
+    env_line REDIS_IMAGE "${REDIS_IMAGE:-redis:7-alpine}"
+    env_line MINIO_IMAGE "$MINIO_IMAGE"
+    env_line MINIO_CLIENT_IMAGE "$MINIO_CLIENT_IMAGE"
+    env_line PYTHON_BASE_IMAGE "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+    env_line NODE_BUILD_IMAGE "${NODE_BUILD_IMAGE:-node:24-alpine}"
+    env_line NGINX_RUNTIME_IMAGE "${NGINX_RUNTIME_IMAGE:-nginx:1.30-alpine}"
     echo 'SEED_DEMO="0"'
     echo 'SMTP_SSL_VERIFY="1"'
     env_line FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
@@ -282,7 +349,7 @@ write_env_file() {
     env_line MINIO_ROOT_USER "$MINIO_ROOT_USER"
     env_line MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
     env_line AWS_S3_CUSTOM_DOMAIN "$MINIO_DOMAIN"
-    echo 'AWS_S3_URL_PROTOCOL="https:"'
+    echo 'AWS_S3_URL_PROTOCOL="http:"'
     echo 'AWS_STORAGE_BUCKET_NAME="finflow-documents"'
     echo
     # Pile e-mail : backend SMTP + worker Celery (alertes async) via Compose
@@ -310,10 +377,6 @@ server {
     listen [::]:80;
     server_name ${app_domain};
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/html;
-    }
-
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host \$host;
@@ -331,10 +394,6 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${minio_domain};
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/html;
-    }
 
     ignore_invalid_headers off;
     proxy_buffering off;
@@ -361,37 +420,6 @@ EOF
   systemctl enable nginx
   systemctl reload nginx
   ok "Nginx (HTTP) configuré pour ${app_domain} et ${minio_domain}."
-}
-
-setup_tls() {
-  local app_domain="$1"
-  local minio_domain="$2"
-  local email="$3"
-
-  log "Obtention des certificats Let's Encrypt…"
-  if ! dig +short "$app_domain" | grep -qE '^[0-9.]+$'; then
-    warn "DNS A pour ${app_domain} introuvable ou non propagé."
-    if ! ask_yes_no "Continuer Certbot quand même ?" "n"; then
-      warn "TLS ignoré — vous pourrez lancer plus tard :"
-      echo "  sudo certbot --nginx -d ${app_domain} -d ${minio_domain}"
-      return
-    fi
-  fi
-
-  certbot --nginx \
-    -d "$app_domain" \
-    -d "$minio_domain" \
-    --non-interactive \
-    --agree-tos \
-    --redirect \
-    -m "$email" \
-    || {
-      warn "Certbot a échoué. Stack HTTP active ; corrigez le DNS puis relancez certbot."
-      return
-    }
-  systemctl reload nginx
-  TLS_READY=1
-  ok "TLS Let's Encrypt actif."
 }
 
 start_stack() {
@@ -506,7 +534,6 @@ print('OK DEFAULT_FROM_EMAIL=', settings.DEFAULT_FROM_EMAIL)
 
 print_summary() {
   local scheme="http"
-  [[ "$TLS_READY" == "1" ]] && scheme="https"
   cat <<EOF
 
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
@@ -536,6 +563,7 @@ ${C_OK}════════════════════════�
 
   Conservez précieusement le fichier ${INSTALL_DIR}/.env (secrets,
   dont FIELD_ENCRYPTION_KEY — ne pas régénérer après sauvegarde de mots de passe SMTP).
+  Copiez aussi /root/.finflow-backup-pass dans un coffre sécurisé hors serveur.
 
 EOF
 }
@@ -556,7 +584,7 @@ collect_inputs() {
 
   prompt "Domaine applicatif (ex. finflow.exemple.tld)" ""
   APP_DOMAIN="$REPLY"
-  [[ -n "$APP_DOMAIN" ]] || die "Le domaine applicatif est obligatoire."
+  valid_hostname "$APP_DOMAIN" || die "Nom DNS applicatif invalide."
 
   DEFAULT_MINIO="minio.${APP_DOMAIN}"
   if [[ "$APP_DOMAIN" == finflow.* ]]; then
@@ -564,7 +592,18 @@ collect_inputs() {
   fi
   prompt "Domaine MinIO (ex. minio.exemple.tld)" "$DEFAULT_MINIO"
   MINIO_DOMAIN="$REPLY"
-  [[ -n "$MINIO_DOMAIN" ]] || die "Le domaine MinIO est obligatoire."
+  valid_hostname "$MINIO_DOMAIN" || die "Nom DNS MinIO invalide."
+
+  prompt "CIDR du réseau local autorisé" "$(bash "$SCRIPT_DIR/lan-firewall.sh" detect-default-cidr)"
+  LAN_CIDR="$(bash "$SCRIPT_DIR/lan-firewall.sh" validate-cidr "$REPLY")" \
+    || die "CIDR LAN invalide : $REPLY"
+
+  prompt "Image MinIO accessible depuis ce serveur" "${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}"
+  MINIO_IMAGE="$REPLY"
+  valid_image_ref "$MINIO_IMAGE" || die "Référence d'image MinIO invalide."
+  prompt "Image du client MinIO (mc) accessible depuis ce serveur" "${MINIO_CLIENT_IMAGE:-cgr.dev/chainguard/minio-client:latest}"
+  MINIO_CLIENT_IMAGE="$REPLY"
+  valid_image_ref "$MINIO_CLIENT_IMAGE" || die "Référence d'image minio-client invalide."
 
   GEN_PG="$(rand_password | tr -d '\n')"
   prompt_secret "Mot de passe PostgreSQL (lettres, chiffres, . _ - ~)" "$GEN_PG"
@@ -629,16 +668,7 @@ collect_inputs() {
   fi
 
   echo
-  SETUP_UFW=0
-  ask_yes_no "Configurer UFW (SSH/80/443) ?" "y" && SETUP_UFW=1
-
-  SETUP_TLS=0
-  CERTBOT_EMAIL=""
-  if ask_yes_no "Obtenir un certificat Let's Encrypt maintenant ? (DNS déjà en place)" "y"; then
-    SETUP_TLS=1
-    prompt "E-mail Let's Encrypt (renouvellements)" "admin@${APP_DOMAIN}"
-    CERTBOT_EMAIL="$REPLY"
-  fi
+  warn "Mode LAN uniquement : le challenge HTTP public Let's Encrypt n'est pas activé. Configurez un certificat interne si HTTPS est requis."
 
   EXPOSE_MINIO_PORT=0
   # Avec sous-domaine HTTPS, pas besoin d'ouvrir 9000 publiquement
@@ -653,8 +683,8 @@ collect_inputs() {
   echo "  MinIO user  : $MINIO_ROOT_USER"
   echo "  SMTP global : $([[ $SMTP_GLOBAL_CONFIGURED -eq 1 ]] && echo "oui ($EMAIL_HOST)" || echo "non — UI filiale")"
   echo "  E-mail pile : SMTP backend + SSL verify + Fernet + worker Celery"
-  echo "  UFW         : $([[ $SETUP_UFW -eq 1 ]] && echo oui || echo non)"
-  echo "  TLS         : $([[ $SETUP_TLS -eq 1 ]] && echo oui || echo non)"
+  echo "  Réseau LAN  : $LAN_CIDR (ports 22/80/443 limités à cette plage)"
+  echo "  TLS         : certificat interne à provisionner si HTTPS est requis"
   echo "----------------------------------"
   ask_yes_no "Lancer le déploiement ?" "y" || die "Annulé."
 }
@@ -662,6 +692,12 @@ collect_inputs() {
 main() {
   need_root
   detect_ubuntu
+
+  if [[ "${1:-}" == "--resume" ]]; then
+    shift
+    resume_install "${1:-$INSTALL_DIR_DEFAULT}"
+    return
+  fi
 
   echo
   echo "FIN_FLOW — installateur Ubuntu interactif"
@@ -674,23 +710,21 @@ main() {
   install_docker
   systemctl enable --now fail2ban || true
 
-  [[ "$SETUP_UFW" -eq 1 ]] && configure_ufw
-
   prepare_install_dir "$INSTALL_DIR" "$REPO_URL" "$GIT_BRANCH"
   write_env_file "$INSTALL_DIR"
+  printf '%s\n' "$LAN_CIDR" > "$INSTALL_DIR/.finflow-lan-cidr"
+  chmod 644 "$INSTALL_DIR/.finflow-lan-cidr"
+  write_install_state
   write_helpers "$INSTALL_DIR"
+  configure_ufw
   write_nginx_http_only "$APP_DOMAIN" "$MINIO_DOMAIN"
   start_stack "$INSTALL_DIR"
 
-  if [[ "$SETUP_TLS" -eq 1 ]]; then
-    setup_tls "$APP_DOMAIN" "$MINIO_DOMAIN" "$CERTBOT_EMAIL"
-  else
-    warn "TLS non configuré. En HTTP derrière Nginx :"
-    echo "  http://${APP_DOMAIN}"
-  fi
+  warn "Application disponible en HTTP sur le LAN : http://${APP_DOMAIN}. Provisionnez un certificat de l'autorité interne avant d'activer HTTPS."
 
   # Sync post-déploiement (migrations, rôles, circuits)
   post_deploy_commands "$INSTALL_DIR"
+  rm -f "$INSTALL_DIR/.finflow-install-state"
 
   print_summary
 }

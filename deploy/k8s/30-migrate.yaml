@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: finflow-migrate
+  namespace: finflow
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: finflow-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: registry.example.com/finflow/backend@sha256:REPLACE_WITH_64_HEX_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: finflow-config
+            - secretRef:
+                name: finflow-secrets

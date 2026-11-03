@@ -54,9 +54,14 @@ x-backend-env: &backend-env
   # En production Ubuntu : forcer SMTP_SSL_VERIFY=1.
   SMTP_SSL_VERIFY: ${SMTP_SSL_VERIFY:-0}
 
+x-backend-build: &backend-build
+  context: ./backend
+  args:
+    PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
+
 services:
   db:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_DB: finflow
       POSTGRES_USER: finflow
@@ -71,7 +76,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     # Persistance broker Celery (AOF) — évite la perte de tâches au restart
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "100"]
     volumes:
@@ -104,7 +109,7 @@ services:
     restart: unless-stopped
 
   backend:
-    build: ./backend
+    build: *backend-build
     environment:
       <<: *backend-env
     volumes:
@@ -120,7 +125,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./backend
+    build: *backend-build
     command: celery -A config worker -l info --concurrency=2 --prefetch-multiplier=1
     environment:
       <<: *backend-env
@@ -133,7 +138,7 @@ services:
     restart: unless-stopped
 
   beat:
-    build: ./backend
+    build: *backend-build
     command: celery -A config beat -l info
     environment:
       <<: *backend-env
@@ -146,7 +151,11 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:24-alpine}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.30-alpine}
     ports:
       # :8080 — le port 80 de l'hôte est réservé à Nginx/Certbot en prod.
       - "127.0.0.1:8080:80"

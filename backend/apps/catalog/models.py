@@ -33,6 +33,8 @@ class CreditProduct(ReferenceModel):
     category = models.ForeignKey(
         ProductCategory,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="products",
         verbose_name="famille",
     )

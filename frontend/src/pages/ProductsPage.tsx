@@ -67,7 +67,7 @@ export function ProductsPage() {
               <tr key={p.id}>
                 <td>{p.code}</td>
                 <td>{p.label}</td>
-                <td>{p.category_label}</td>
+                <td>{p.category_label || "—"}</td>
                 <td className="num">{formatMoney(p.amount_min, p.currency)}</td>
                 <td className="num">{formatMoney(p.amount_max, p.currency)}</td>
                 <td className="num">{p.interest_rate} %</td>

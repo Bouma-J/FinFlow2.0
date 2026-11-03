@@ -13,19 +13,19 @@ Deux scripts interactifs au choix :
 
 | Script | Cas d’usage | Accès |
 |--------|-------------|--------|
-| [`deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh) | Domaines DNS + Let’s Encrypt | `https://finflow.…` |
-| [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Lab / IP seule, sans DNS | `http://<IP>/` ou `https://<IP>/` |
+| [`deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh) | Domaines internes, filtrage LAN | `http://finflow.…` |
+| [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Réseau local / IP privée seule | `http://<IP>/` ou HTTPS auto-signé |
 | [`deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh) | HTTPS sur une install IP déjà en place | `https://<IP>/` |
 | [`deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh) | **Mise à jour** d’une instance déjà en prod | — |
 
-**Avec domaines + TLS :**
+**Avec des noms DNS internes (les ports restent limités au LAN) :**
 
 ```bash
 # depuis le dépôt cloné avec un accès GitHub autorisé :
 sudo bash deploy/ubuntu-install.sh
 ```
 
-**Par adresse IP (sans domaine — HTTP, ou HTTPS Let’s Encrypt / auto-signé) :**
+**Par adresse IP privée (sans domaine — HTTP, ou HTTPS auto-signé) :**
 
 ```bash
 # depuis le dépôt cloné avec un accès GitHub autorisé :
@@ -40,20 +40,21 @@ sudo finflow-update
 sudo bash /opt/finflow/deploy/ubuntu-update.sh
 ```
 
-L’update exige un snapshot chiffré complet avant de modifier le code ; si le snapshot échoue, l’update s’arrête. `SKIP_BACKUP=1` reste une dérogation explicite. Le script préserve l’URL Git `origin` de l’instance (`REPO_URL=...` permet de la remplacer), puis contrôle le démarrage, applique les migrations et synchronise les rôles et filiales. Un échec de migration, synchronisation ou health check interrompt l’opération. Les installateurs refusent d’écraser un `.env` existant : utilisez l’update pour une instance déjà configurée. Ils demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO sur `:9000` en HTTP) et, une fois HTTPS activé, [`docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml) (MinIO en `127.0.0.1:19000`, Nginx termine le TLS sur `:443` et `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
+L’update vérifie un snapshot chiffré complet avant de modifier le code ; si sa création ou sa vérification échoue, l’application n’est pas mise à jour. Il contrôle ensuite l’API, le frontend, PostgreSQL, Redis et les services Celery. Un échec interrompt l’opération et affiche la révision précédente ainsi que le snapshot à restaurer si le schéma a changé. Il n’y a pas de retour arrière automatique des migrations. Les deux installateurs limitent les ports d’entrée au CIDR LAN saisi. Le mode IP lie aussi MinIO à l’adresse IP privée de FinFlow ; le filtre Docker `DOCKER-USER` protège ce port, car les ports publiés par Docker ne sont pas filtrés de façon fiable par UFW seul. Le profil IP+TLS place MinIO derrière Nginx sur `127.0.0.1:19000`.
 
-#### Première mise à jour d’une installation ancienne
+#### Reprise d’une installation interrompue
 
-Si le serveur possède une ancienne version des scripts de déploiement, actualisez d’abord le dépôt pour installer le nouveau script de sauvegarde chiffrée et le nouvel updater. Cette opération ne redémarre pas les conteneurs ; l’updater effectuera ensuite le snapshot avant de reconstruire l’application :
+Après un échec de l’installateur IP, reprenez à partir du `.env` conservé :
 
 ```bash
-sudo git -C /opt/finflow fetch origin main
-sudo git -C /opt/finflow checkout main
-sudo git -C /opt/finflow pull --ff-only origin main
-sudo bash /opt/finflow/deploy/ubuntu-update.sh
+sudo bash /opt/finflow/deploy/ubuntu-install-ip.sh --resume /opt/finflow
 ```
 
-Si le dépôt utilise une autre branche ou un autre répertoire, adaptez `main` et `/opt/finflow`. Les commandes s’arrêtent en cas de modifications locales qui empêchent le fast-forward ; sauvegardez-les et résolvez-les avant de relancer.
+Pour une ancienne instance dont la sauvegarde installée est trop ancienne, lancez l’updater depuis une copie récente du dépôt. Il actualise uniquement les outils de sauvegarde, crée et vérifie le snapshot, puis reprend le déploiement :
+
+```bash
+sudo bash ~/FinFlow2.0/deploy/ubuntu-update.sh /opt/finflow
+```
 
 ---
 
@@ -68,13 +69,12 @@ Si le dépôt utilise une autre branche ou un autre répertoire, adaptez `main` 
 | PostgreSQL 16 | Base de données | `db` |
 | Redis 7 | Broker Celery + cache | `redis` |
 | MinIO | Stockage GED / contrats (S3) | `minio` |
-| Nginx hôte (recommandé) | TLS, domaine public | hors Compose |
-| Certbot | Certificats Let’s Encrypt | hors Compose |
+| Nginx hôte | Reverse-proxy LAN, TLS interne optionnel | hors Compose |
 
-Flux navigateur typique :
+Flux navigateur typique sur le réseau local :
 
 ```text
-Internet → Nginx (443) → frontend:80 → API / SPA
+LAN autorisé → Nginx (80/443) → frontend:80 → API / SPA
                        ↘ MinIO:9000 (URLs présignées fichiers)
 ```
 
@@ -89,16 +89,16 @@ Internet → Nginx (443) → frontend:80 → API / SPA
 | Disque | 40 Go SSD | 80 Go+ SSD |
 | OS | Ubuntu 22.04 / 24.04 / 26.04 LTS 64-bit | idem |
 | Docker Compose | 2.24.4 minimum (`!override` requis par les fichiers Compose) | version stable fournie par le dépôt Docker |
-| Réseau | IP publique + DNS A/AAAA | domaine dédié |
+| Réseau | IP privée et CIDR LAN connus | segmentation réseau dédiée |
 
 Ports à prévoir (firewall) :
 
 | Port | Usage |
 |------|--------|
 | 22 | SSH |
-| 80 | HTTP (redirection / ACME) |
-| 443 | HTTPS (application) |
-| 9000 | MinIO API (fichiers présignés) — restreindre si possible |
+| 80 | HTTP (application) — CIDR LAN uniquement |
+| 443 | HTTPS (application) — CIDR LAN uniquement |
+| 9000 | MinIO API (fichiers présignés) — CIDR LAN uniquement |
 | 9001 | Console MinIO — **ne pas exposer** en prod (SSH tunnel uniquement) |
 
 ---
@@ -127,9 +127,7 @@ sudo apt install -y \
   openssl \
   ufw \
   fail2ban \
-  nginx \
-  certbot \
-  python3-certbot-nginx
+  nginx
 ```
 
 | Outil | Utilité |
@@ -139,7 +137,7 @@ sudo apt install -y \
 | `openssl` | Secrets, TLS |
 | `ufw` | Pare-feu |
 | `fail2ban` | Protection SSH |
-| `nginx` + `certbot` | Reverse-proxy HTTPS |
+| `nginx` | Reverse-proxy LAN ; TLS interne si certificat disponible |
 | `htop` | Supervision rapide |
 
 ### 3.2 Docker Engine + Compose v2 (plugin officiel)
@@ -179,18 +177,7 @@ docker run --rm hello-world
 
 ### 3.3 Pare-feu UFW
 
-```bash
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow OpenSSH
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-# MinIO API (URLs présignées navigateur → serveur:9000)
-sudo ufw allow 9000/tcp
-# Ne pas ouvrir 9001 (console MinIO) ni 5432 / 6379
-sudo ufw --force enable
-sudo ufw status verbose
-```
+Les installateurs configurent UFW à partir du CIDR LAN saisi et installent un filtre `DOCKER-USER` persistant pour le port MinIO. Ne remplacez pas ces règles par `ufw allow 22/tcp`, `ufw allow 80/tcp` ou des règles équivalentes sans source : elles ouvriraient ces ports à toutes les adresses. Le port `9001` (console MinIO), PostgreSQL `5432` et Redis `6379` ne sont jamais ouverts au réseau.
 
 ### 3.4 Fail2ban (SSH)
 
@@ -199,28 +186,31 @@ sudo systemctl enable --now fail2ban
 sudo fail2ban-client status sshd
 ```
 
-### 3.5 DNS (chez le registrar / serveur DNS — pas sur le serveur FinFlow)
+### 3.5 Noms DNS internes (facultatif)
 
-Ces enregistrements se créent **sur le DNS public** de votre domaine (espace client OVH, Cloudflare, Gandi, serveur Bind/PowerDNS du prestataire, etc.).
+Pour l'accès LAN, utilisez le DNS interne de l'organisation ou un nom local résolu par les postes clients. Aucun enregistrement DNS public ni challenge Let’s Encrypt n'est requis.
 
-Ils ne se mettent **pas** dans `/etc/hosts` du serveur qui héberge FIN_FLOW : ce fichier ne sert qu’à des tests locaux sur une machine de développement.
-
-Avant le certificat TLS (Let’s Encrypt), créez :
+Les noms doivent pointer vers l'adresse privée du serveur. Si vous utilisez le fichier `/etc/hosts`, ajoutez les entrées sur chaque poste client, pas seulement sur le serveur :
 
 | Type | Nom | Valeur | Où le configurer |
 |------|-----|--------|------------------|
-| A | `finflow.votredomaine.tld` | IP publique du serveur FinFlow | Panneau DNS du domaine |
-| A | `minio.votredomaine.tld` | IP publique du serveur FinFlow | Panneau DNS du domaine (recommandé pour les fichiers) |
+| A | `finflow.intra` | IP privée du serveur FinFlow | DNS interne |
+| A | `minio.finflow.intra` | IP privée du serveur FinFlow | DNS interne |
 
 Vérification depuis n’importe quelle machine :
 
 ```bash
-dig +short finflow.votredomaine.tld
-# doit renvoyer l’IP publique du serveur
+dig +short finflow.intra
+# doit renvoyer l’adresse privée du serveur
 ```
 
-> **Exception lab / sans domaine :** uniquement pour un essai interne, vous pouvez ajouter une ligne dans `/etc/hosts` **sur le PC client** (celui du navigateur), pas comme solution de production :
+> **Exception lab / sans DNS :** vous pouvez ajouter une ligne dans `/etc/hosts` **sur chaque PC client** (celui du navigateur) :
 > `IP_DU_SERVEUR  finflow.local minio.local`
+
+> **Déploiement LAN pris en charge :** pour créer une instance, utilisez l’un
+> des deux installateurs en haut de ce guide. Les exemples manuels des sections
+> 4 à 9 expliquent les paramètres Compose, mais ne remplacent pas l’installateur
+> et peuvent contourner la restriction LAN ou les contrôles de sauvegarde.
 
 
 ---
@@ -237,12 +227,7 @@ cd /opt/finflow
 git clone git@github.com:Bouma-J/FinFlow2.0.git .
 ```
 
-Mises à jour ultérieures :
-
-```bash
-cd /opt/finflow
-git pull origin main
-```
+Après l’installation, mettez le projet à jour uniquement avec `sudo finflow-update` afin de conserver le snapshot pré-update, la détection IP/TLS et les contrôles de santé.
 
 Structure attendue à la racine : `docker-compose.yml`, `backend/`, `frontend/`, `documentation/`.
 
@@ -265,9 +250,9 @@ Exemple minimal production :
 # --- Django ---
 DJANGO_SECRET_KEY=REMPLACER_PAR_UNE_CLE_LONGUE_ALEATOIRE
 DJANGO_DEBUG=False
-DJANGO_ALLOWED_HOSTS=finflow.votredomaine.tld,localhost,127.0.0.1,backend
-DJANGO_SECURE_SSL_REDIRECT=True
-DJANGO_CORS_ALLOWED_ORIGINS=https://finflow.votredomaine.tld
+DJANGO_ALLOWED_HOSTS=finflow.intra,localhost,127.0.0.1,backend
+DJANGO_SECURE_SSL_REDIRECT=False
+DJANGO_CORS_ALLOWED_ORIGINS=http://finflow.intra
 
 # --- Seed (toujours 0 en prod) ---
 SEED_DEMO=0
@@ -276,25 +261,29 @@ SEED_DEMO=0
 MINIO_ROOT_USER=finflow_minio_admin
 MINIO_ROOT_PASSWORD=MotDePasseMinIOTresLong!
 
-# Domaine public MinIO vu par le navigateur (URLs présignées)
-# Si vous exposez MinIO derrière minio.votredomaine.tld :
-#   AWS_S3_CUSTOM_DOMAIN=minio.votredomaine.tld
-#   AWS_S3_URL_PROTOCOL=https:
-# Sinon (accès direct port 9000) :
-#   AWS_S3_CUSTOM_DOMAIN=finflow.votredomaine.tld:9000
-#   AWS_S3_URL_PROTOCOL=http:
-# (préférer HTTPS + sous-domaine dédié)
+AWS_S3_CUSTOM_DOMAIN=minio.finflow.intra
+AWS_S3_URL_PROTOCOL=http:
 
 # --- E-mail global (repli) ; chaque filiale peut avoir son SMTP en UI ---
 EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
-EMAIL_HOST=smtp.votredomaine.tld
+EMAIL_HOST=smtp.intra
 EMAIL_PORT=587
 EMAIL_USE_TLS=True
 EMAIL_USE_SSL=False
-EMAIL_HOST_USER=noreply@votredomaine.tld
+EMAIL_HOST_USER=noreply@finflow.intra
 EMAIL_HOST_PASSWORD=********
-DEFAULT_FROM_EMAIL=FIN_FLOW <noreply@votredomaine.tld>
-FRONTEND_BASE_URL=https://finflow.votredomaine.tld
+DEFAULT_FROM_EMAIL=FIN_FLOW <noreply@finflow.intra>
+FRONTEND_BASE_URL=http://finflow.intra
+
+# Images sélectionnées à l'installation ; utiliser des versions ou digests approuvés.
+# Les images MinIO et minio-client doivent être joignables depuis le serveur.
+POSTGRES_IMAGE=postgres:16-alpine
+REDIS_IMAGE=redis:7-alpine
+MINIO_IMAGE=cgr.dev/chainguard/minio:latest
+MINIO_CLIENT_IMAGE=cgr.dev/chainguard/minio-client:latest
+PYTHON_BASE_IMAGE=python:3.12-slim
+NODE_BUILD_IMAGE=node:24-alpine
+NGINX_RUNTIME_IMAGE=nginx:1.30-alpine
 
 # En production Ubuntu : vérifier les certificats SMTP
 SMTP_SSL_VERIFY=1
@@ -317,20 +306,20 @@ Clé Fernet (chiffrement SMTP) :
 openssl rand -base64 32 | tr '+/' '-_'
 ```
 
-> **Important :** le `docker-compose.yml` de démo fixe encore certaines variables (Postgres `finflow`/`finflow`, MinIO `localhost:9000`, etc.). Pour une prod réelle, adaptez `docker-compose.yml` (ou un `docker-compose.prod.yml`) afin de lire `DJANGO_ALLOWED_HOSTS`, `AWS_S3_CUSTOM_DOMAIN`, `FRONTEND_BASE_URL`, mots de passe DB/MinIO depuis `.env`. Voir section 10.
+Les installateurs génèrent le `.env` et sélectionnent les surcharges Compose. Pour un déploiement existant, ne remplacez pas manuellement ses mots de passe ou URL : utilisez `finflow-update` après avoir vérifié les paramètres d'images.
 
 ---
 
 ## 6. Compose production
 
-Le dépôt fournit déjà [`docker-compose.prod.yml`](../docker-compose.prod.yml) : il surcharge les secrets, force `SEED_DEMO=0`, `SMTP_SSL_VERIFY=1`, injecte `EMAIL_*` / `FIELD_ENCRYPTION_KEY` dans **backend + worker + beat**, et expose frontend/MinIO uniquement sur `127.0.0.1` (Nginx hôte fait le TLS public).
+Le dépôt fournit déjà [`docker-compose.prod.yml`](../docker-compose.prod.yml) : il surcharge les secrets, force `SEED_DEMO=0`, `SMTP_SSL_VERIFY=1`, injecte `EMAIL_*` / `FIELD_ENCRYPTION_KEY` dans **backend + worker + beat**, et expose le frontend ainsi que MinIO localement. Le mode IP remplace la publication MinIO en HTTP par l'adresse LAN du serveur ; le profil IP+TLS le remet sur `127.0.0.1` derrière Nginx.
 
 Ajouter dans `.env` :
 
 ```env
 POSTGRES_PASSWORD=MotDePassePostgresTresLong!
-AWS_S3_CUSTOM_DOMAIN=minio.votredomaine.tld
-AWS_S3_URL_PROTOCOL=https:
+AWS_S3_CUSTOM_DOMAIN=minio.finflow.intra
+AWS_S3_URL_PROTOCOL=http:
 ```
 
 Alias pratique :
@@ -357,9 +346,9 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f backend
 
 Au démarrage du `backend` :
 
-1. Attente PostgreSQL  
-2. Création du bucket MinIO `finflow-documents`  
-3. Migrations Django + `collectstatic`  
+1. Attente PostgreSQL
+2. Création du bucket MinIO `finflow-documents`
+3. Migrations Django + `collectstatic`
 4. Seed **désactivé** (`SEED_DEMO=0`)
 
 Vérifications locales :
@@ -399,122 +388,22 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend \
 
 ---
 
-## 8. Nginx reverse-proxy + Let’s Encrypt
+## 8. HTTPS interne
 
-Le frontend Compose écoute sur `127.0.0.1:8080`. Nginx public termine le TLS.
+L'installation assistée configure HTTP et limite les ports au CIDR LAN. Le
+mode IP peut activer un certificat auto-signé. Pour des noms DNS internes,
+faites émettre les certificats par l'autorité interne de l'organisation et
+configurez Nginx pour ces noms ; cette étape n'est pas automatisée par le
+dépôt. Ne réouvrez pas les ports à toutes les adresses lors du provisionnement
+TLS.
 
-### 8.1 Configuration application
+### 8.1 TLS sur IP et HSTS
 
-`/etc/nginx/sites-available/finflow` :
-
-```nginx
-server {
-    listen 80;
-    listen [::]:80;
-    server_name finflow.votredomaine.tld;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/html;
-    }
-
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name finflow.votredomaine.tld;
-
-    # Remplacés / complétés par Certbot
-    ssl_certificate     /etc/letsencrypt/live/finflow.votredomaine.tld/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/finflow.votredomaine.tld/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
-    client_max_body_size 100m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
-}
-```
-
-### 8.2 Configuration MinIO (sous-domaine recommandé)
-
-`/etc/nginx/sites-available/finflow-minio` :
-
-```nginx
-server {
-    listen 80;
-    server_name minio.votredomaine.tld;
-    location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 301 https://$host$request_uri; }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name minio.votredomaine.tld;
-
-    ssl_certificate     /etc/letsencrypt/live/minio.votredomaine.tld/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/minio.votredomaine.tld/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
-    client_max_body_size 100m;
-
-    # API S3 path-style : /finflow-documents/...
-    ignore_invalid_headers off;
-    proxy_buffering off;
-
-    location / {
-        proxy_pass http://127.0.0.1:9000;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_connect_timeout 300;
-        proxy_http_version 1.1;
-        chunked_transfer_encoding off;
-    }
-}
-```
-
-Activer et obtenir les certificats :
-
-```bash
-sudo ln -sf /etc/nginx/sites-available/finflow /etc/nginx/sites-enabled/
-sudo ln -sf /etc/nginx/sites-available/finflow-minio /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-
-# Première fois : commenter temporairement les blocs ssl_certificate
-# puis :
-sudo certbot --nginx -d finflow.votredomaine.tld -d minio.votredomaine.tld
-
-sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl enable nginx
-```
-
-Renouvellement automatique (timer systemd fourni par Certbot) :
-
-```bash
-sudo certbot renew --dry-run
-```
-
-### 8.1 TLS et HSTS sans nom de domaine
-
-Le déploiement type FinFlow est un **réseau interne (IP privée)**. Let’s Encrypt ne peut pas émettre de certificat pour une IP RFC1918 (`10/8`, `192.168/16`, `172.16–31`) : le challenge HTTP-01 doit être joignable depuis Internet.
+Le déploiement type FinFlow est un **réseau interne (IP privée)**. L'installation automatique n'ouvre aucun port à Internet et n'utilise pas Let's Encrypt. HTTPS sur IP utilise un certificat auto-signé ou la PKI interne.
 
 | Situation | Certificat | HSTS | Navigateur |
 |-----------|------------|------|------------|
-| **IP privée / LAN (cas prévu)** | Auto-signé (`openssl`, SAN `IP:…`) ou PKI interne / mkcert. | **Désactivé.** Auto-signé + HSTS = verrouillage au prochain renouvellement. | Avertissement « certificat non fiable » à accepter une fois (ou déployer la CA interne sur les postes). |
-| **IP publique** (80/443 ouverts depuis Internet) | Let’s Encrypt **certificat IP** (profil `shortlived`, ~6 jours). Certbot ≥ 5.4. | `max-age=604800` (7 jours), sans `includeSubDomains` ni preload. | Cadenas normal. |
+| **IP privée / LAN** | Auto-signé avec SAN `IP` ou PKI interne. | Désactivé avec le certificat auto-signé. | Avertissement navigateur ou confiance installée via la CA interne. |
 
 Sur une instance interne déjà en HTTP :
 
@@ -522,7 +411,7 @@ Sur une instance interne déjà en HTTP :
 sudo bash /opt/finflow/deploy/tls-ip/enable-ip-tls.sh /opt/finflow --self-signed
 ```
 
-Sans `--self-signed`, le script détecte une IP privée et choisit tout seul l’auto-signé (il refuse `--lets-encrypt` sur du RFC1918).
+Le script refuse une IP publique et n'accepte que le mode auto-signé ; pour une confiance transparente, utilisez un certificat signé par la PKI interne.
 
 Le script :
 
@@ -545,19 +434,19 @@ curl -k -fsSI https://<IP>/api/v1/health/
 
 ## 9. Checklist post-installation
 
-1. [ ] `https://finflow.votredomaine.tld` charge la SPA  
-2. [ ] `https://finflow.votredomaine.tld/api/v1/health/` → `ready: true`  
-3. [ ] `https://finflow.votredomaine.tld/api/docs/` accessible (restreindre en prod si besoin)  
-4. [ ] Connexion admin + création d’une filiale  
-5. [ ] **Administration → Alertes e-mail** : SMTP filiale + test d’envoi  
-6. [ ] Génération d’un contrat / upload document → téléchargement OK (MinIO présigné)  
-7. [ ] `SMTP_SSL_VERIFY=1`  
-8. [ ] `FIELD_ENCRYPTION_KEY` présent dans `.env` (installateur ou ajout manuel)  
-9. [ ] `SEED_DEMO=0`  
-10. [ ] Mots de passe DB / MinIO / Django distincts et forts  
-11. [ ] Console MinIO `:9001` non exposée  
-12. [ ] Worker Celery up (`finflow ps`)  
-13. [ ] Sauvegardes planifiées (section 11)  
+1. [ ] `http://finflow.intra` (ou l'URL LAN configurée) charge la SPA
+2. [ ] `/api/v1/health/` depuis le LAN renvoie `ready: true`
+3. [ ] Les routes API attendues sont accessibles depuis le LAN
+4. [ ] Connexion admin + création d’une filiale
+5. [ ] **Administration → Alertes e-mail** : SMTP filiale + test d’envoi
+6. [ ] Génération d’un contrat / upload document → téléchargement OK (MinIO présigné)
+7. [ ] `SMTP_SSL_VERIFY=1`
+8. [ ] `FIELD_ENCRYPTION_KEY` présent dans `.env` (installateur ou ajout manuel)
+9. [ ] `SEED_DEMO=0`
+10. [ ] Mots de passe DB / MinIO / Django distincts et forts
+11. [ ] Console MinIO `:9001` non exposée
+12. [ ] Worker Celery up (`finflow ps`)
+13. [ ] Sauvegardes planifiées (section 11)
 
 ---
 
@@ -577,16 +466,13 @@ sudo bash /opt/finflow/deploy/ubuntu-update.sh --check /opt/finflow
 Options utiles :
 
 ```bash
-# Sans snapshot préalable (dérogation à réserver aux cas maîtrisés)
-sudo env SKIP_BACKUP=1 finflow-update
-
 # Branche / répertoire personnalisés
 GIT_BRANCH=main INSTALL_DIR=/opt/finflow sudo -E bash /opt/finflow/deploy/ubuntu-update.sh
 ```
 
 Le script détecte automatiquement le mode **domaine** ou **IP** (`.finflow-deploy-mode`, `.finflow-tls-mode`, ou heuristique `.env`) via [`deploy/compose-files.sh`](../deploy/compose-files.sh). Il contrôle Docker Compose 2.24.4 ou supérieur et conserve le dépôt Git `origin` configuré par défaut.
 
-### 10.2 Commandes manuelles
+### 10.2 Exploitation courante
 
 ```bash
 cd /opt/finflow
@@ -597,13 +483,6 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 $COMPOSE ps
 $COMPOSE logs -f --tail=200 backend worker beat
 
-# Mise à jour release (manuel)
-git pull
-$COMPOSE up -d --build
-$COMPOSE exec backend python manage.py migrate
-$COMPOSE exec backend python manage.py sync_role_packs
-$COMPOSE exec backend python manage.py bootstrap_all_tenants
-
 # Shell Django
 $COMPOSE exec backend python manage.py shell
 
@@ -612,6 +491,9 @@ $COMPOSE restart backend worker beat
 ```
 
 Images **bakées** (pas de volume code) : tout changement Python/React exige `--build`.
+Pour déployer un nouveau commit, utilisez exclusivement `sudo finflow-update` :
+un `git pull` suivi d'un `up` manuel contourne le snapshot chiffré, les
+migrations contrôlées et les contrôles de santé.
 
 ---
 
@@ -619,10 +501,17 @@ Images **bakées** (pas de volume code) : tout changement Python/React exige `--
 
 L’install pose un cron 02:30 (`/etc/cron.d/finflow-backup`) et une phrase de
 chiffrement dans `/root/.finflow-backup-pass` (mode 600). Chaque sauvegarde est
-un archive GPG AES-256 (`.tar.gz.gpg`) contenant Postgres, le miroir MinIO, le
-manifest et les clés applicatives. Le fichier de clés reste aussi chiffré dans
-l’archive. Les copies locales et hors site ne conservent donc pas les dumps en
-clair.
+une archive GPG AES-256 (`.tar.gz.gpg`) contenant PostgreSQL, le miroir exact
+du bucket MinIO, le manifest et le `.env` complet chiffré. Pendant la capture,
+Nginx, le frontend, le backend, worker et beat sont mis en pause ; en mode IP
+HTTP, le port MinIO est temporairement filtré. La fenêtre de maintenance dure
+le temps du dump PostgreSQL, du miroir MinIO et de la copie du `.env`, puis les
+services redémarrent avant le chiffrement et la rétention.
+
+**Copiez la phrase de passe dans un coffre sécurisé indépendant du serveur.**
+La phrase stockée uniquement dans `/root` ne survivrait pas à la perte du
+serveur ; sans elle, les archives chiffrées sont irrécupérables. Testez
+régulièrement une restauration `drill` sur une machine séparée.
 
 ```bash
 # Snapshot manuel
@@ -639,11 +528,12 @@ sudo /opt/finflow/scripts/restore.sh --target drill \
 sudo /opt/finflow/scripts/restore.sh --target live \
   --snapshot /var/backups/finflow/snapshots/<stamp>.tar.gz.gpg \
   --confirm=RESTORE
-# Ajouter --restore-secrets si le .env actuel n'a plus les clés du dump.
+# Ajouter --restore-secrets si la configuration complète du snapshot doit être restaurée.
 ```
 
 Rétention : 14 jours (quotidien), 8 semaines (copie du dimanche), 12 mois
-(copie du 1er). Copie hors site : `BACKUP_OFFSITE_DIR=/mnt/backup-nas`.
+(copie du 1er). Copie hors site : `BACKUP_OFFSITE_DIR=/mnt/backup-nas`. La
+phrase de passe doit rester stockée séparément du répertoire de sauvegarde.
 
 Ne jamais réinjecter un dump avec `psql` dans la base en service : le script
 `restore.sh --target live` arrête l’application, recrée une base vide, puis
@@ -664,12 +554,12 @@ sudo bash /opt/finflow/deploy/backup/selftest.sh
 
 | Contrôle | Commande / URL |
 |----------|----------------|
-| Santé API | `curl -fsS https://finflow…/api/v1/health/` |
+| Santé API | `curl -fsS http://finflow.intra/api/v1/health/` |
 | Conteneurs | `docker compose … ps` |
 | Logs | `docker compose … logs -f backend worker` |
 | Disque | `df -h` |
 | Mémoire | `free -h` / `htop` |
-| Certificats | `sudo certbot certificates` |
+| Certificat interne | vérifier le certificat déployé dans Nginx / PKI de l'organisation |
 
 En prod avancée : brancher Prometheus / Grafana / Sentry (`SENTRY_DSN`) — voir [10 — Exploitation](10-exploitation-supervision.md).
 
@@ -684,7 +574,7 @@ En prod avancée : brancher Prometheus / Grafana / Sentry (`SENTRY_DSN`) — voi
 | Fichiers AccessDenied | `AWS_S3_CUSTOM_DOMAIN` / protocole HTTPS / CORS bucket |
 | E-mails en échec | SMTP filiale (UI), `SMTP_SSL_VERIFY=1`, logs worker |
 | Alertes workflow absentes | Worker Celery up ; prefs « Alertes e-mail » |
-| Certbot échoue | DNS, ports 80/443 ouverts, `server_name` correct |
+| Accès LAN refusé | Vérifier le CIDR enregistré dans `/opt/finflow/.finflow-lan-cidr` et les règles UFW |
 | Disque plein | Volumes Docker `docker system df` ; purger anciennes images |
 
 ```bash
@@ -701,7 +591,7 @@ journalctl -u nginx -u docker -n 100 --no-pager
 |-----------|--------|
 | OS | Ubuntu 22.04 / 24.04 / 26.04 LTS |
 | Conteneurs | Docker Engine, Compose plugin, Buildx |
-| Proxy / TLS | Nginx, Certbot, OpenSSL |
+| Proxy / TLS | Nginx, OpenSSL, PKI interne éventuelle |
 | Sécurité | UFW, Fail2ban |
 | Stack applicative | PostgreSQL 16, Redis 7, MinIO, Gunicorn, Celery |
 | Exploitation | git, curl, jq, htop, mc (MinIO client), cron |
@@ -712,15 +602,15 @@ journalctl -u nginx -u docker -n 100 --no-pager
 ## 15. Références
 
 - **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow2.0](https://github.com/Bouma-J/FinFlow2.0)
-- **Script d’install Ubuntu (domaines + TLS) :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
-- **Script d’install Ubuntu (IP, HTTP ou HTTPS) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)  
-- **HTTPS sans domaine :** [`../deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh)  
-- **Script de mise à jour production :** [`../deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh)  
-- **Compose surcharge IP :** [`../docker-compose.ip.yml`](../docker-compose.ip.yml), [`../docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml)  
-- Configuration détaillée : [05 — Configuration](05-configuration.md)  
-- Architecture : [02 — Architecture technique](02-architecture-technique.md)  
-- Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  
-- Kubernetes (alternative) : [`../deploy/k8s/README.md`](../deploy/k8s/README.md)  
+- **Script d’install Ubuntu (noms DNS internes, filtrage LAN) :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)
+- **Script d’install Ubuntu (IP, HTTP ou HTTPS) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)
+- **HTTPS sans domaine :** [`../deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh)
+- **Script de mise à jour production :** [`../deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh)
+- **Compose surcharge IP :** [`../docker-compose.ip.yml`](../docker-compose.ip.yml), [`../docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml)
+- Configuration détaillée : [05 — Configuration](05-configuration.md)
+- Architecture : [02 — Architecture technique](02-architecture-technique.md)
+- Exploitation : [10 — Exploitation](10-exploitation-supervision.md)
+- Kubernetes (alternative) : [`../deploy/k8s/README.md`](../deploy/k8s/README.md)
 - Variables d’exemple : [`.env.example`](../.env.example), [`backend/.env.example`](../backend/.env.example)
 
 ---

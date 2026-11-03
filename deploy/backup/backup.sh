@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Snapshot chiffré d'instance FinFlow : Postgres (custom) + MinIO + secrets.
+# Snapshot chiffré d'instance FinFlow : Postgres (custom) + MinIO + configuration .env.
 #
 #   sudo FINFLOW_DIR=/opt/finflow ./deploy/backup/backup.sh
 #   BACKUP_PASSPHRASE_FILE=/root/.finflow-backup-pass ./deploy/backup/backup.sh
@@ -10,7 +10,7 @@
 #   BACKUP_PASSPHRASE      Phrase de chiffrement du snapshot complet
 #   BACKUP_PASSPHRASE_FILE Fichier contenant la phrase (recommandé)
 #   BACKUP_OFFSITE_DIR     Copie rsync du snapshot (optionnel)
-#   SKIP_APP_PAUSE=1       Ne pas arrêter worker/beat
+#   SKIP_APP_PAUSE=1       Ne pas mettre l'application et ses accès en pause (snapshot potentiellement incohérent)
 #   SKIP_MINIO=1           Dump SQL + secrets seulement
 #   SKIP_SECRETS=1         Ne pas empaqueter .env (déconseillé)
 set -euo pipefail
@@ -52,20 +52,39 @@ MINIO_USER="$(load_dotenv_value "$ENV_FILE" MINIO_ROOT_USER)"
 MINIO_USER="${MINIO_USER:-minioadmin}"
 MINIO_PASS="$(load_dotenv_value "$ENV_FILE" MINIO_ROOT_PASSWORD)"
 MINIO_PASS="${MINIO_PASS:-minioadmin}"
+MINIO_CLIENT_IMAGE="${MINIO_CLIENT_IMAGE:-$(load_dotenv_value "$ENV_FILE" MINIO_CLIENT_IMAGE)}"
+MINIO_CLIENT_IMAGE="${MINIO_CLIENT_IMAGE:-cgr.dev/chainguard/minio-client:latest}"
 
 STOPPED=()
 SNAP_CREATED=0
-cleanup_backup() {
+NGINX_STOPPED=0
+MINIO_INGRESS_BLOCKED=0
+MINIO_INGRESS_CIDR=""
+resume_paused_services() {
   local svc
+  if [[ "$MINIO_INGRESS_BLOCKED" == "1" ]]; then
+    iptables -D DOCKER-USER -p tcp -s "$MINIO_INGRESS_CIDR" \
+      -m conntrack --ctorigdstport 9000 -j DROP >/dev/null 2>&1 || \
+      warn "Le blocage temporaire de MinIO doit être vérifié dans DOCKER-USER."
+    MINIO_INGRESS_BLOCKED=0
+  fi
+  for svc in "${STOPPED[@]+"${STOPPED[@]}"}"; do
+    compose_in "$DIR" start "$svc" >/dev/null 2>&1 || warn "Impossible de relancer ${svc}"
+  done
+  STOPPED=()
+  if [[ "$NGINX_STOPPED" == "1" ]]; then
+    systemctl start nginx >/dev/null 2>&1 || warn "Impossible de relancer Nginx après le snapshot."
+    NGINX_STOPPED=0
+  fi
+}
+cleanup_backup() {
   # Ne jamais laisser un dump ou miroir en clair après un échec de snapshot.
   if [[ "$SNAP_CREATED" == "1" ]]; then
     case "$SNAP" in
       "${BACKUP_ROOT}/snapshots/"*) rm -rf -- "$SNAP" ;;
     esac
   fi
-  for svc in "${STOPPED[@]+"${STOPPED[@]}"}"; do
-    compose_in "$DIR" start "$svc" >/dev/null 2>&1 || warn "Impossible de relancer ${svc}"
-  done
+  resume_paused_services
 }
 trap cleanup_backup EXIT
 
@@ -78,7 +97,27 @@ log "Instance  ${DIR}"
 log "Compose   docker compose ${COMPOSE_FILES}"
 
 if [[ "${SKIP_APP_PAUSE:-0}" != "1" ]]; then
-  for svc in worker beat; do
+  # Nginx ferme l'accès client, puis les services applicatifs sont arrêtés afin
+  # que le dump SQL et le miroir d'objets décrivent le même état applicatif.
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx; then
+    systemctl stop nginx
+    NGINX_STOPPED=1
+  fi
+  if [[ "$COMPOSE_FILES" == *docker-compose.ip.yml* && "$COMPOSE_FILES" != *docker-compose.ip-tls.yml* ]]; then
+    if ! command -v iptables >/dev/null 2>&1 || ! iptables -nL DOCKER-USER >/dev/null 2>&1; then
+      die "Le mode IP/HTTP publie MinIO directement ; un filtre DOCKER-USER est requis pour le snapshot cohérent."
+    fi
+    MINIO_INGRESS_CIDR="$(cat "$DIR/.finflow-lan-cidr" 2>/dev/null || true)"
+    if [[ -z "$MINIO_INGRESS_CIDR" ]]; then
+      MINIO_INGRESS_CIDR="$(bash "${SCRIPT_DIR}/../lan-firewall.sh" detect-default-cidr)"
+    fi
+    MINIO_INGRESS_CIDR="$(bash "${SCRIPT_DIR}/../lan-firewall.sh" validate-cidr "$MINIO_INGRESS_CIDR")" \
+      || die "CIDR LAN requis pour mettre MinIO en pause pendant le snapshot."
+    iptables -I DOCKER-USER 1 -p tcp -s "$MINIO_INGRESS_CIDR" \
+      -m conntrack --ctorigdstport 9000 -j DROP
+    MINIO_INGRESS_BLOCKED=1
+  fi
+  for svc in backend worker beat frontend; do
     if compose_in "$DIR" ps --status running --services 2>/dev/null | grep -qx "$svc"; then
       log "Pause ${svc}"
       compose_in "$DIR" stop "$svc"
@@ -102,7 +141,7 @@ if [[ "${SKIP_MINIO:-0}" != "1" ]]; then
     -e MC_HOST_src="http://${MINIO_USER}:${MINIO_PASS}@minio:9000" \
     --user 0:0 \
     -v "$(host_path "${SNAP}/minio"):/backup" \
-    cgr.dev/chainguard/minio-client:latest \
+    "$MINIO_CLIENT_IMAGE" \
     mirror --overwrite "src/${BUCKET}" /backup
 else
   warn "MinIO ignoré (SKIP_MINIO=1)"
@@ -111,10 +150,7 @@ fi
 SECRETS_INCLUDED=0
 if [[ "${SKIP_SECRETS:-0}" != "1" && -f "$ENV_FILE" ]]; then
   TMP_SECRETS="$(mktemp_host "$SNAP")"
-  {
-    echo "# FinFlow secrets snapshot ${STAMP}"
-    grep -E '^(FIELD_ENCRYPTION_KEY|DJANGO_SECRET_KEY)=' "$ENV_FILE" || true
-  } > "$TMP_SECRETS"
+  cp -- "$ENV_FILE" "$TMP_SECRETS"
   if grep -q '=' "$TMP_SECRETS"; then
     encrypt_secrets_file "$TMP_SECRETS" "${SNAP}/secrets.env.enc"
     SECRETS_INCLUDED=1
@@ -125,6 +161,10 @@ if [[ "${SKIP_SECRETS:-0}" != "1" && -f "$ENV_FILE" ]]; then
 else
   warn "Secrets non empaquetés (SKIP_SECRETS=1 ou .env absent)"
 fi
+
+# La paire SQL + objets + configuration est maintenant figée. Reprendre les
+# services avant le chiffrement, la rétention et la copie hors site.
+resume_paused_services
 
 GIT_SHA=""
 if [[ -d "${DIR}/.git" ]]; then
@@ -167,6 +207,7 @@ manifest = {
     "postgres_db": pg_db,
     "bucket": bucket,
     "secrets_included": secrets_included == "1",
+    "secrets_format": "dotenv-full-v1" if secrets_included == "1" else None,
     "files": {
         "postgres.dump": {"sha256": pg_sha, "bytes": int(pg_bytes)},
         "minio": {"bytes": int(minio_bytes or 0), "objects": int(minio_files or 0)},

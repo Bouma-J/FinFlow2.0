@@ -12,6 +12,6 @@
 services:
   minio:
     ports: !override
-      - "9000:9000"
+      - "${FINFLOW_PUBLIC_IP:?FINFLOW_PUBLIC_IP requis}:9000:9000"
       # Console : rester en local / tunnel SSH
       - "127.0.0.1:9001:9001"

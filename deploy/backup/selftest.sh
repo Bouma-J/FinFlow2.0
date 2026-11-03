@@ -9,6 +9,15 @@ export MSYS_NO_PATHCONV=1
 
 command -v docker >/dev/null || die "docker est requis"
 
+INSTANCE_DIR="$(finflow_dir)"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-$(load_dotenv_value "$INSTANCE_DIR/.env" POSTGRES_IMAGE)}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
+MINIO_IMAGE="${MINIO_IMAGE:-$(load_dotenv_value "$INSTANCE_DIR/.env" MINIO_IMAGE)}"
+MINIO_IMAGE="${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}"
+MINIO_CLIENT_IMAGE="${MINIO_CLIENT_IMAGE:-$(load_dotenv_value "$INSTANCE_DIR/.env" MINIO_CLIENT_IMAGE)}"
+MINIO_CLIENT_IMAGE="${MINIO_CLIENT_IMAGE:-cgr.dev/chainguard/minio-client:latest}"
+export POSTGRES_IMAGE MINIO_IMAGE MINIO_CLIENT_IMAGE
+
 if [[ -n "${LOCALAPPDATA:-}" ]]; then
   _tmp="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$LOCALAPPDATA")/Temp"
 elif [[ -d /c/Windows/Temp ]]; then
@@ -34,7 +43,7 @@ cat > "${WORKDIR}/docker-compose.yml" <<'YAML'
 name: ffbackupselftest
 services:
   db:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE}
     environment:
       POSTGRES_USER: finflow
       POSTGRES_PASSWORD: selftest
@@ -45,7 +54,7 @@ services:
       timeout: 3s
       retries: 30
   minio:
-    image: cgr.dev/chainguard/minio:latest
+    image: ${MINIO_IMAGE}
     user: "0:0"
     command: server /data --console-address ":9001"
     environment:
@@ -53,11 +62,14 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
 YAML
 
-cat > "${WORKDIR}/.env" <<'ENV'
+cat > "${WORKDIR}/.env" <<ENV
 POSTGRES_USER=finflow
 POSTGRES_DB=finflow
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=minioadmin
+POSTGRES_IMAGE=${POSTGRES_IMAGE}
+MINIO_IMAGE=${MINIO_IMAGE}
+MINIO_CLIENT_IMAGE=${MINIO_CLIENT_IMAGE}
 AWS_STORAGE_BUCKET_NAME=finflow-documents
 FIELD_ENCRYPTION_KEY=selftest-fernet-key-not-for-prod
 DJANGO_SECRET_KEY=selftest-django-secret
@@ -81,13 +93,13 @@ NETWORK="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}
   "$(docker compose --project-directory "$WORKDIR_HOST" ps -q minio)")"
 docker run --rm --network "$NETWORK" \
   -e MC_HOST_src="http://minioadmin:minioadmin@minio:9000" \
-  cgr.dev/chainguard/minio-client:latest mb -p src/finflow-documents
+  "$MINIO_CLIENT_IMAGE" mb -p src/finflow-documents
 printf 'ged-selftest' > "${WORKDIR}/selftest.txt"
 docker run --rm --network "$NETWORK" \
   -e MC_HOST_src="http://minioadmin:minioadmin@minio:9000" \
   --user 0:0 \
   -v "$(host_path "${WORKDIR}/selftest.txt"):/data/selftest.txt:ro" \
-  cgr.dev/chainguard/minio-client:latest cp /data/selftest.txt src/finflow-documents/selftest.txt
+  "$MINIO_CLIENT_IMAGE" cp /data/selftest.txt src/finflow-documents/selftest.txt
 
 export FINFLOW_DIR="$WORKDIR"
 export COMPOSE_FILES="-f docker-compose.yml"
