@@ -19,7 +19,7 @@
 set -euo pipefail
 
 REPO_URL_DEFAULT="${REPO_URL:-https://github.com/Bouma-J/FinFlow2.0.git}"
-INSTALL_DIR_DEFAULT="/opt/finflow"
+INSTALL_DIR_DEFAULT="${INSTALL_DIR_DEFAULT:-/opt/finflow}"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 DEPLOY_MODE="domain"
 LAN_CIDR=""
@@ -162,12 +162,15 @@ install_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get upgrade -y
-  apt-get install -y \
+  local -a packages=(
     ca-certificates curl wget gnupg lsb-release \
     apt-transport-https software-properties-common \
-    git unzip jq htop net-tools openssl ufw fail2ban \
+    unzip jq htop net-tools openssl ufw fail2ban \
     dnsutils rsync openssh-server \
     nginx
+  )
+  [[ -n "${FINFLOW_LOCAL_SOURCE_DIR:-}" ]] || packages+=(git)
+  apt-get install -y "${packages[@]}"
   ok "Paquets système installés."
 }
 
@@ -283,7 +286,15 @@ prepare_install_dir() {
 
   [[ ! -e "$dir/.env" ]] || die "Un .env existe déjà dans $dir. L'installateur refuse d'écraser les secrets ; utilisez ubuntu-update.sh."
   mkdir -p "$dir"
-  if [[ -f "$dir/docker-compose.yml" && -f "$dir/docker-compose.prod.yml" ]]; then
+  if [[ -n "${FINFLOW_LOCAL_SOURCE_DIR:-}" ]]; then
+    local source_dir="$(cd "$FINFLOW_LOCAL_SOURCE_DIR" && pwd)"
+    [[ -f "$source_dir/docker-compose.yml" && -f "$source_dir/docker-compose.prod.yml" ]] \
+      || die "Archive locale incomplète : docker-compose.yml ou docker-compose.prod.yml manquant."
+    [[ -z "$(ls -A "$dir" 2>/dev/null || true)" ]] \
+      || die "Le répertoire $dir n'est pas vide ; choisissez un répertoire neuf ou reprenez l'installation interrompue."
+    cp -a "$source_dir/." "$dir/"
+    log "Code copié depuis l'archive locale vers $dir (sans Git)."
+  elif [[ -f "$dir/docker-compose.yml" && -f "$dir/docker-compose.prod.yml" ]]; then
     [[ -d "$dir/.git" ]] || die "Le projet présent dans $dir n'est pas un dépôt Git."
     log "Projet déjà présent dans $dir — synchronisation stricte de $branch…"
     if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
@@ -573,14 +584,24 @@ collect_inputs() {
   echo "========== Paramètres de déploiement FIN_FLOW =========="
   echo
 
-  prompt "Répertoire d'installation" "$INSTALL_DIR_DEFAULT"
-  INSTALL_DIR="$REPLY"
+  if [[ -n "${FINFLOW_LOCAL_INSTALL_DIR:-}" ]]; then
+    INSTALL_DIR="$FINFLOW_LOCAL_INSTALL_DIR"
+    echo "Répertoire d'installation : $INSTALL_DIR"
+  else
+    prompt "Répertoire d'installation" "$INSTALL_DIR_DEFAULT"
+    INSTALL_DIR="$REPLY"
+  fi
 
-  prompt "URL du dépôt Git" "$REPO_URL_DEFAULT"
-  REPO_URL="$REPLY"
-
-  prompt "Branche Git" "${GIT_BRANCH:-main}"
-  GIT_BRANCH="$REPLY"
+  if [[ -n "${FINFLOW_LOCAL_SOURCE_DIR:-}" ]]; then
+    REPO_URL="archive locale"
+    GIT_BRANCH="sans Git"
+    echo "Source du code : archive locale (sans Git)"
+  else
+    prompt "URL du dépôt Git" "$REPO_URL_DEFAULT"
+    REPO_URL="$REPLY"
+    prompt "Branche Git" "${GIT_BRANCH:-main}"
+    GIT_BRANCH="$REPLY"
+  fi
 
   prompt "Domaine applicatif (ex. finflow.exemple.tld)" ""
   APP_DOMAIN="$REPLY"

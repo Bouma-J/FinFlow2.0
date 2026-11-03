@@ -15,8 +15,38 @@ Deux scripts interactifs au choix :
 |--------|-------------|--------|
 | [`deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh) | Domaines internes, filtrage LAN | `http://finflow.…` |
 | [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Réseau local / IP privée seule | `http://<IP>/` ou HTTPS auto-signé |
+| [`deploy/ubuntu-deploy-local.sh`](../deploy/ubuntu-deploy-local.sh) | Installation ou mise à jour depuis un ZIP extrait, sans Git | LAN |
 | [`deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh) | HTTPS sur une install IP déjà en place | `https://<IP>/` |
 | [`deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh) | **Mise à jour** d’une instance déjà en prod | — |
+
+#### Déploiement depuis un ZIP local (sans Git)
+
+Le ZIP source ne contient ni `.git`, ni secrets, ni base de données. Après l'avoir
+transféré et extrait sur le serveur, lancez le script depuis le répertoire
+`FinFlow2.0` extrait :
+
+```bash
+unzip FinFlow2.0-<commit>.zip -d /tmp/finflow-release
+cd /tmp/finflow-release/FinFlow2.0
+
+# Première installation — adresse IP privée
+sudo bash deploy/ubuntu-deploy-local.sh --install-ip /opt/finflow
+
+# Ou première installation — noms DNS internes
+sudo bash deploy/ubuntu-deploy-local.sh --install-domain /opt/finflow
+
+# Mise à jour d'une instance existante
+sudo bash deploy/ubuntu-deploy-local.sh --update /opt/finflow
+```
+
+Le mode `--update` crée et vérifie d’abord un snapshot chiffré complet, synchronise
+le code en préservant `.env`, les données, les volumes et les marqueurs LAN/TLS,
+puis reconstruit les images, applique les migrations et vérifie la santé. Sur une
+installation créée sans Git, `sudo finflow-update /tmp/finflow-release/FinFlow2.0`
+utilise le nouveau ZIP extrait pour les mises à jour suivantes. Conservez la
+phrase de chiffrement des sauvegardes hors du serveur. Le script local n'envoie
+pas les fichiers `.env`, bases SQLite, certificats locaux, dépendances Node ou
+journaux présents dans le dossier source.
 
 **Avec des noms DNS internes (les ports restent limités au LAN) :**
 
